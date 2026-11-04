@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from 'motion/react'
-import { AlertTriangle, Check, ChevronDown, Download, EyeOff, HardDrive, Loader2, Lock, PenLine, Users, WifiOff } from 'lucide-react'
-import { memo, useCallback, useEffect, useRef, useState, type ReactNode, type Ref } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { AlertTriangle, Check, ChevronDown, Download, EyeOff, HardDrive, Loader2, Lock, Users, WifiOff } from 'lucide-react'
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react'
+import { Link, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import type { Group, Phase } from '../../shared/protocol'
 import { formatClock, useObservable } from '../lib/store'
@@ -9,8 +9,10 @@ import { detectHub } from '../net/bus'
 import { BuildVersion } from '../ui/BuildVersion'
 import { Avatar, Logo, Modal, Pill, Popover, PopoverRow, Segmented, Switch, useTick } from '../ui/kit'
 import { alertLabel, canStreamToDisk, download, exportRoomZip, safeName } from './exportZip'
-import { openRoom, type AlertEntry, type Grade, type Room, type Student, type Team } from './room'
+import { openRoom, type AlertEntry, type Room, type Student } from './room'
 import { keepConnected } from './reconnect'
+import { buildRows, EMPTY_QUERY, filterRows, isFiltering, type RosterQuery } from './roster'
+import { Marked, NoMatch, ResultsTable, RosterBar, studentPath, useRosterState, Waiting } from './RosterView'
 import { formatBytes } from './storageWatch'
 import './dash.css'
 
@@ -18,13 +20,21 @@ const HOST_URL = import.meta.env.VITE_HOST_URL ?? 'https://github.com/giulianoo0
 const ALARM_MS = 3000
 const TAB_RETRY_MS = 2000
 const FEED_LIMIT = 200
+const SEARCH_SETTLE_MS = 120
 const pop = { type: 'spring', bounce: 0.25, duration: 0.6 } as const
 const settle = { type: 'spring', bounce: 0, duration: 0.36 } as const
 
 const PHASE_LABEL: Record<Phase, string> = { lobby: 'Sala aberta', running: 'Em prova', ended: 'Encerrada' }
 
 export const hhmmss = (at: number) => new Date(at).toLocaleTimeString('pt-BR')
-export const studentPath = (roomId: string, clientId: string) => `/sala/${encodeURIComponent(roomId)}/aluno/${encodeURIComponent(clientId)}`
+export { studentPath }
+
+// Só em desenvolvimento: ?demo=100 abre uma sala de mentira com esse número de alunos.
+const demoSize = () => {
+  if (!import.meta.env.DEV) return null
+  const n = new URLSearchParams(location.search).get('demo')
+  return n === null ? null : Number(n) || 0
+}
 
 // undefined enquanto lê do IndexedDB; null quando a sala não existe.
 export function useRoom(roomId: string) {
@@ -32,7 +42,9 @@ export function useRoom(roomId: string) {
   useEffect(() => {
     let live = true
     setRoom(undefined)
-    openRoom(roomId).then(
+    const demo = demoSize()
+    const open = import.meta.env.DEV && demo !== null ? import('./demo').then((m) => m.openDemoRoom(roomId, demo, new URLSearchParams(location.search).get('modo') === 'individual' ? 'individual' : 'group')) : openRoom(roomId)
+    open.then(
       (r) => live && setRoom(r),
       () => live && setRoom(null),
     )
@@ -41,6 +53,16 @@ export function useRoom(roomId: string) {
     }
   }, [roomId])
   return room
+}
+
+// Só aparece se demorar: abrir a sala do IndexedDB costuma ser instantâneo, e piscar seria pior.
+export function RoomLoading() {
+  return (
+    <div className="center-screen room-loading" role="status">
+      <Loader2 size={20} className="spin" aria-hidden="true" />
+      <span>Abrindo a sala</span>
+    </div>
+  )
 }
 
 export function RoomMissing() {
@@ -90,6 +112,17 @@ export function RoomGate({ room, children }: { room: Room; children: ReactNode }
       </div>
     </div>
   )
+}
+
+// O valor só muda depois de `ms` sem mudar; apagar tudo vale na hora.
+function useSettled<T>(value: T, ms: number) {
+  const [settled, setSettled] = useState(value)
+  useEffect(() => {
+    if (!value) return setSettled(value)
+    const t = setTimeout(() => setSettled(value), ms)
+    return () => clearTimeout(t)
+  }, [value, ms])
+  return settled
 }
 
 // O navegador só libera áudio depois de um gesto, então o contexto nasce no primeiro clique ou tecla.
@@ -199,7 +232,7 @@ export function useRoomRuntime(room: Room, onAlarm?: (clientId: string) => void)
 export default function Dashboard() {
   const { roomId = '' } = useParams()
   const room = useRoom(roomId)
-  if (room === undefined) return null
+  if (room === undefined) return <RoomLoading />
   if (!room) return <RoomMissing />
   return (
     <RoomGate room={room}>
@@ -233,10 +266,24 @@ function DashboardView({ room }: { room: Room }) {
   }, [])
   useRoomRuntime(room, raise)
 
-  const [picked, setPicked] = useState<'wall' | 'results' | null>(null)
-  const view = room.phase === 'lobby' ? 'wall' : (picked ?? (room.phase === 'ended' ? 'results' : 'wall'))
+  const [roster, setRoster] = useRosterState()
+  const setView = useCallback((view: 'wall' | 'results') => setRoster((s) => ({ ...s, view })), [setRoster])
+  const view = room.phase === 'lobby' ? 'wall' : (roster.view ?? (room.phase === 'ended' ? 'results' : 'wall'))
   const [confirmEnd, setConfirmEnd] = useState(false)
   const [exporting, setExporting] = useState(false)
+
+  // A busca chega aqui em transição, e o texto só depois de uma pausa: com 100 miniaturas, refazer a
+  // parede a cada letra pesa mais que esperar o professor parar de digitar.
+  const text = useSettled(roster.query.text, SEARCH_SETTLE_MS)
+  const { filters, question } = roster.query
+  const typed = useMemo(() => ({ filters, question, text }), [filters, question, text])
+  const query = useDeferredValue(typed)
+  const ids = room.exam.questions.map((q) => q.id)
+  const rows = buildRows(room, Date.now())
+  const filtering = isFiltering(query)
+  const shown = filtering ? filterRows(rows, query, ids) : rows
+  const visible = filtering ? new Set(shown.map((r) => r.id)) : null
+  const clear = useCallback(() => setRoster((s) => ({ ...s, query: EMPTY_QUERY })), [setRoster])
 
   const total = room.students.size
   let online = 0
@@ -261,7 +308,7 @@ function DashboardView({ room }: { room: Room }) {
         {room.phase !== 'lobby' && (
           <Segmented
             value={view}
-            onChange={setPicked}
+            onChange={setView}
             options={[
               { value: 'wall', label: 'Telas' },
               { value: 'results', label: 'Notas' },
@@ -284,7 +331,12 @@ function DashboardView({ room }: { room: Room }) {
       </header>
 
       <div className="dash-body">
-        <main className="dash-main">{view === 'wall' ? <Wall room={room} alarms={alarms} /> : <ResultsTable room={room} />}</main>
+        <main className="dash-main">
+          {total > 0 && <RosterBar room={room} rows={rows} shown={shown.length} state={roster} setState={setRoster} csv={view === 'results'} />}
+          <div className="dash-scroll">
+            {view === 'wall' ? <Wall room={room} alarms={alarms} query={query} visible={visible} onClear={clear} /> : <ResultsTable room={room} query={query} sort={roster.sort} setState={setRoster} />}
+          </div>
+        </main>
         <aside className="dash-side">
           <ConnectionCard room={room} />
           <StorageCard room={room} />
@@ -564,17 +616,21 @@ function issueOf(room: Room, s: Student) {
   return null
 }
 
-function Wall({ room, alarms }: { room: Room; alarms: ReadonlySet<string> }) {
-  const students = [...room.students.values()].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
-  if (!students.length) {
-    return (
-      <div className="dash-wait">
-        <div className="dash-ring" role="status" aria-label="Esperando alunos" />
-      </div>
-    )
-  }
+interface WallProps {
+  room: Room
+  alarms: ReadonlySet<string>
+  query: RosterQuery
+  // null: sem busca nem filtro, todos aparecem.
+  visible: ReadonlySet<string> | null
+  onClear: () => void
+}
+
+function Wall({ room, alarms, query, visible, onClear }: WallProps) {
+  if (!room.students.size) return <Waiting />
+  const students = [...room.students.values()].filter((s) => !visible || visible.has(s.clientId)).sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
+  if (!students.length) return <NoMatch query={query} onClear={onClear} />
   const movable = room.phase !== 'ended' && room.config.mode === 'group'
-  const list = (items: Student[]) => <TileList room={room} students={items} alarms={alarms} movable={movable} />
+  const list = (items: Student[]) => <TileList room={room} students={items} alarms={alarms} movable={movable} mark={query.text} />
   if (room.config.mode !== 'group') return list(students)
 
   const known = new Set(room.config.groups.map((g) => g.id))
@@ -583,11 +639,13 @@ function Wall({ room, alarms }: { room: Room; alarms: ReadonlySet<string> }) {
     <>
       {room.config.groups.map((g) => {
         const members = students.filter((s) => s.groupId === g.id)
-        if (!members.length && room.phase !== 'lobby') return null
+        if (!members.length && (room.phase !== 'lobby' || visible)) return null
         return (
           <section key={g.id}>
             <div className="group-head">
-              <span className="team-name">{g.name}</span>
+              <span className="team-name">
+                <Marked text={g.name} query={query.text} />
+              </span>
               <span className="team-code" title="Código privado da equipe">
                 {room.teamCode(g.id)}
               </span>
@@ -644,7 +702,7 @@ export function MemberChips({ room, members }: { room: Room; members: Student[] 
   )
 }
 
-function TileList({ room, students, alarms, movable }: { room: Room; students: Student[]; alarms: ReadonlySet<string>; movable: boolean }) {
+function TileList({ room, students, alarms, movable, mark }: { room: Room; students: Student[]; alarms: ReadonlySet<string>; movable: boolean; mark: string }) {
   // Só muda quando alguém entra ou sai da lista: é o que mantém 40 miniaturas sem medir layout a cada quadro.
   const order = students.map((s) => s.clientId).join()
   return (
@@ -668,6 +726,7 @@ function TileList({ room, students, alarms, movable }: { room: Room; students: S
             // Quem já tem a prova carrega o documento da equipe antiga: trocar agora misturaria os dois.
             groups={movable && !s.examGranted && room.config.groups.length ? room.config.groups : undefined}
             groupId={s.groupId}
+            mark={mark}
           />
         ))}
       </AnimatePresence>
@@ -691,10 +750,12 @@ interface TileProps {
   order: string
   groups?: Group[]
   groupId?: string
+  // A busca, para marcar o trecho achado no nome.
+  mark: string
 }
 
 // Só primitivos nas props: o Student é mutado no lugar, então o memo compara os valores que aparecem.
-const Tile = memo(function Tile({ ref, room, clientId, name, thumb, online, signalLost, alerts, beaconMissing, issue, finished, alarm, order, groups, groupId }: TileProps) {
+const Tile = memo(function Tile({ ref, room, clientId, name, thumb, online, signalLost, alerts, beaconMissing, issue, finished, alarm, order, groups, groupId, mark }: TileProps) {
   return (
     <motion.div
       ref={ref}
@@ -733,7 +794,9 @@ const Tile = memo(function Tile({ ref, room, clientId, name, thumb, online, sign
         </div>
         <div className="tile-tag">
           <i className={`dot ${online && !signalLost ? 'on' : 'off'}`} />
-          <span>{name}</span>
+          <span>
+            <Marked text={name} query={mark} />
+          </span>
         </div>
       </Link>
       {groups && (
@@ -771,6 +834,7 @@ const Tile = memo(function Tile({ ref, room, clientId, name, thumb, online, sign
 
 // `count` é a única coisa que invalida o memo: as miniaturas chegam muito mais rápido que os alertas.
 const AlertFeed = memo(function AlertFeed({ room, count }: { room: Room; count: number }) {
+  if (!count) return <p className="alert-none">Nenhum alerta. Saída de tela cheia, troca de janela e afins aparecem aqui na hora.</p>
   return (
     <div className="alert-feed">
       {room.alerts.slice(0, FEED_LIMIT).map((a, i) => (
@@ -784,94 +848,6 @@ const AlertFeed = memo(function AlertFeed({ room, count }: { room: Room; count: 
           <time className="xs faint num">{hhmmss(a.at)}</time>
         </Link>
       ))}
-    </div>
-  )
-})
-
-// ---- notas
-
-function teamRows(room: Room) {
-  const rows = new Map<string, { team: Team; members: Student[] }>()
-  for (const s of room.students.values()) {
-    const team = room.teamOf(s)
-    const row = rows.get(team.key)
-    if (row) row.members.push(s)
-    else rows.set(team.key, { team, members: [s] })
-  }
-  const label = (members: Student[]) => {
-    const group = room.config.mode === 'group' && members[0].groupId
-    return (group && room.config.groups.find((g) => g.id === group)?.name) || members[0].name
-  }
-  return [...rows.values()].map((r) => ({ ...r, label: label(r.members) })).sort((a, b) => a.label.localeCompare(b.label, 'pt-BR'))
-}
-
-function GradeCell({ grade }: { grade?: Grade }) {
-  if (!grade) return <span className="faint">–</span>
-  if (grade.status === 'pending' || grade.status === 'running') return <Loader2 size={14} className="spin muted" aria-label="Corrigindo" />
-  if (grade.status === 'manual' && !grade.graded) return <PenLine size={14} className="warn" aria-label="Falta corrigir" />
-  return (
-    <span className={`num${grade.status === 'compile-error' ? ' bad' : ''}`} title={grade.status === 'compile-error' ? 'Não compilou' : undefined}>
-      {grade.points}
-    </span>
-  )
-}
-
-// Com tique próprio: a tabela não precisa refazer a cada miniatura que chega.
-const ResultsTable = memo(function ResultsTable({ room }: { room: Room }) {
-  useTick(1000)
-  const nav = useNavigate()
-  const rows = teamRows(room)
-  if (!rows.length) {
-    return (
-      <div className="dash-wait">
-        <div className="dash-ring" role="status" aria-label="Esperando alunos" />
-      </div>
-    )
-  }
-  return (
-    <div className="card results-wrap">
-      <table className="results">
-        <thead>
-          <tr>
-            <th>{room.config.mode === 'group' ? 'Equipe' : 'Aluno'}</th>
-            {room.exam.questions.map((q) => (
-              <th key={q.id} title={q.title}>
-                {q.id}
-              </th>
-            ))}
-            <th>Total</th>
-            <th>Alertas</th>
-            <th />
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(({ team, members, label }) => {
-            const score = room.scoreOf(team)
-            const open = () => nav(studentPath(room.config.roomId, members[0].clientId))
-            const manual = room.exam.questions.filter((q) => team.grades[q.id]?.status === 'manual' && !team.grades[q.id].graded).length
-            const enrollment = room.config.mode !== 'group' ? members[0].enrollment : undefined
-            return (
-              <tr key={team.key} data-link tabIndex={0} onClick={open} onKeyDown={(e) => e.key === 'Enter' && open()}>
-                <td>
-                  {label}
-                  {enrollment && <small>{enrollment}</small>}
-                  {team.key.startsWith('g:') && <small>{members.map((m) => m.name).join(', ')}</small>}
-                </td>
-                {room.exam.questions.map((q) => (
-                  <td key={q.id}>
-                    <GradeCell grade={team.grades[q.id]} />
-                  </td>
-                ))}
-                <td className="num">
-                  <b>{score.earned}</b> / {score.total}
-                </td>
-                <td className={`num${members.some((m) => m.alerts) ? ' bad' : ''}`}>{members.reduce((n, m) => n + m.alerts, 0)}</td>
-                <td>{manual > 0 && <span className="badge">Corrigir {manual}</span>}</td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
     </div>
   )
 })

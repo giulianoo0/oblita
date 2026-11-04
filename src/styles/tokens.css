@@ -57,6 +57,11 @@
   --status-danger-ink: oklch(0.45 0.17 25);
   --popover-glass: color-mix(in oklab, #fff 72%, transparent);
   --popover-filter: blur(28px) saturate(160%);
+  --mark: color-mix(in oklab, var(--amber-500) 42%, transparent);
+  --mark-scrim: color-mix(in oklab, var(--amber-500) 55%, transparent);
+  --chip-on: color-mix(in oklab, var(--brand) 13%, var(--tile));
+  --chip-on-ring: color-mix(in oklab, var(--brand) 45%, transparent);
+  --row-hover: color-mix(in oklab, var(--tile), var(--text) 5%);
   --scrim: rgb(0 0 0 / 45%);
   --scrim-strong: rgb(0 0 0 / 62%);
   --scrim-filter: blur(16px);
@@ -129,6 +134,10 @@
     --status-danger-soft: color-mix(in oklab, var(--red-500) 22%, transparent);
     --status-danger-ink: var(--red-300);
     --popover-glass: color-mix(in oklab, #282828 72%, transparent);
+    --mark: color-mix(in oklab, var(--amber-500) 26%, transparent);
+    --chip-on: color-mix(in oklab, var(--brand) 26%, var(--tile));
+    --chip-on-ring: color-mix(in oklab, var(--brand) 60%, transparent);
+    --row-hover: color-mix(in oklab, var(--tile), var(--text) 6%);
     --shadow-float: 0 1px 2px rgb(0 0 0 / 40%), 0 20px 44px -20px rgb(0 0 0 / 70%);
     --shadow-chip: inset 0 1px 0 oklch(1 0 0 / 0.06), 0 0 0 1px oklch(1 0 0 / 0.07);
   }
