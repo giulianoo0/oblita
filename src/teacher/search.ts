@@ -4,11 +4,14 @@ const strip = (text: string) => text.normalize('NFD').replace(/\p{M}/gu, '').toL
 
 export const normalize = strip
 
-const words = (query: string) => strip(query).split(/\s+/).filter(Boolean)
+export const words = (query: string) => strip(query).split(/\s+/).filter(Boolean)
 
-// `hay` já normalizado: o painel guarda um por aluno, em vez de refazer a cada letra digitada.
-export function matchesText(hay: string, query: string) {
-  return words(query).every((w) => hay.includes(w))
+// O campo de busca manda cada letra em transição, e o valor volta atrasado ou pulando passos. Valor
+// que ele mesmo mandou é eco e não mexe no que já está digitado; outro valor veio de fora (limpar).
+export function settleEcho(pending: string[], value: string) {
+  const i = pending.indexOf(value)
+  if (i === -1) return { pending: [], external: true }
+  return { pending: pending.slice(i + 1), external: false }
 }
 
 export interface Piece {

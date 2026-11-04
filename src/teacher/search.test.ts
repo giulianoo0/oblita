@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { highlight, matchesText, normalize } from './search'
+import { highlight, normalize, settleEcho, words } from './search'
 
 describe('normalize', () => {
   test('tira acento e maiúscula', () => {
@@ -7,16 +7,10 @@ describe('normalize', () => {
   })
 })
 
-describe('matchesText', () => {
-  test('cada palavra precisa aparecer em algum lugar, sem acento e sem maiúscula', () => {
-    const hay = normalize('Júlia Souza 2023001 Equipe Azul')
-    expect(matchesText(hay, 'julia')).toBe(true)
-    expect(matchesText(hay, 'AZUL  júl')).toBe(true)
-    expect(matchesText(hay, 'julia verde')).toBe(false)
-  })
-
-  test('busca vazia casa com todos', () => {
-    expect(matchesText('qualquer', '   ')).toBe(true)
+describe('words', () => {
+  test('palavras da busca, normalizadas, sem vazias', () => {
+    expect(words('  AZUL  Júl ')).toEqual(['azul', 'jul'])
+    expect(words('   ')).toEqual([])
   })
 })
 
@@ -47,5 +41,23 @@ describe('highlight', () => {
       { text: 'José ', hit: false },
       { text: 'Lima', hit: true },
     ])
+  })
+})
+
+describe('eco do campo de busca', () => {
+  test('valor que o campo mandou volta atrasado e não apaga o que já foi digitado', () => {
+    expect(settleEcho(['b', 'be', 'bea', 'beat'], 'bea')).toEqual({ pending: ['beat'], external: false })
+  })
+
+  test('transição que pula valores intermediários também é eco', () => {
+    expect(settleEcho(['a', 'ab', 'abc'], 'abc')).toEqual({ pending: [], external: false })
+  })
+
+  test('valor que o campo nunca mandou veio de fora (limpar), e o campo segue ele', () => {
+    expect(settleEcho(['an', 'ana'], '')).toEqual({ pending: [], external: true })
+  })
+
+  test('apagar tudo e digitar de novo: o vazio atrasado ainda é eco', () => {
+    expect(settleEcho(['a', '', 'x'], '')).toEqual({ pending: ['x'], external: false })
   })
 })
