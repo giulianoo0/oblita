@@ -119,7 +119,13 @@ Definidos e validados em `shared/exam.ts`, documentados em `public/llms.txt`.
 
 `shared/frames.ts`, `shared/protocol.ts`.
 
-**Quadros:** tudo é binário. Tag 1 JSON, tag 2 binário com cabeçalho, tag 3 cifrado.
+**Quadros:** tudo é binário. Tag 1 JSON, tag 2 binário com cabeçalho, tag 3 cifrado, tag 4 comprimido.
+
+**Versão:** `PROTOCOL_VERSION` vai no `hi` e no `hello`. Versões diferentes são recusadas com `version`. A 2 trouxe compressão, prova por partes e o Testar com executável.
+
+**Compressão:** antes de cifrar, quadros JSON e binários a partir de 512 bytes vão em `deflate-raw` (tag 4), se encolherem. Vídeo, miniatura e selo já vêm comprimidos e vão como estão. Quem recebe descomprime em pedaços e para no teto (48 MB para o aluno, 9 MB para o professor), contra bomba de descompressão. Comprimido dentro de comprimido é recusado. Os dois lados mantêm a ordem dos quadros com uma fila por conexão, porque comprimir é assíncrono.
+
+**Prova por partes:** a prova inteira só sai ao conectar ou reconectar (`exam`), com o JSON da parte visível comprimido uma vez para a sala toda e reaproveitado; só a cifra é por aluno. Liberar e retirar mandam só a diferença (`questions`): a questão nova, ou o id retirado. Questão retirada fica guardada no aluno até o fim da conexão, e se voltar vem só o id, sem enunciado nem imagens de novo. Somar tempo e fim de tempo mandam só os relógios (`clocks`). Mensagens iguais para todos são codificadas e comprimidas uma vez por envio. Se o aluno não tiver o que restaurar, reconecta e recebe tudo.
 
 **Hub:** `[u32 conexão][u8 op][dados]`, op 0 abriu, 1 fechou, 2 dados. Endpoints: `GET /ping`, `GET /host-token` (só loopback e origem permitida), `WS /ws/host?token=`, `WS /ws/student`, `WS /ws/files?token=`. Os alunos sobrevivem ao painel recarregar. O painel reconecta sozinho ao programa, com espera crescente até 15 s, quando a permissão de rede local já foi dada. Acima de 256 MiB na fila de envio da aba, o aluno daquela conexão cai e reenvia ao voltar.
 
@@ -157,6 +163,16 @@ Implementação em `shared/secure.ts` e `shared/policy.ts`, com testes em `share
 **Hub:** `/ws/host` exige loopback e token. `/host-token` exige loopback e origem permitida (`HUB_ORIGINS`). Limite de conexões por IP, e um aluno abusivo cai sem levar o painel junto.
 
 **Painel resistente a aluno adulterado:** qualquer erro ao tratar uma mensagem derruba só aquela conexão. Campos numéricos e de tipo enumerado são conferidos, e horários vêm do relógio do professor. Documento Yjs adulterado é ignorado no que não for texto, sem impedir as outras equipes de encerrar. Salvamento em ritmo fixo de 1 s, só das chaves que mudaram (`src/teacher/roomStore.ts`): o estático uma vez, cada documento de equipe quando muda, alunos, equipes e alertas em chaves próprias, tudo numa transação. A confirmação ao aluno só sai depois de salvo; se o salvamento falhar, ela espera a próxima volta. Um número de sequência pulado (painel recarregou antes de salvar) é aceito e fica visível na cadeia de hash, em vez de travar o fluxo. Fila de correção com uma entrada por equipe e questão, retomada ao recarregar. Cota de 2 GiB de gravação por aluno.
+
+**Programa de aluno no professor (Testar, Rodar de reserva, correção):** é código hostil por definição, e desde a versão 2 o Testar manda o executável já montado pelo aluno, não o código. O que o nosso clang garantia passa a ser conferido antes de instanciar (`shared/wasm.ts`, parser próprio das seções): até 8 MB; só imports de funções `wasi_snapshot_preview1` que o shim oferece; nenhuma memória, tabela ou global importada; exatamente uma memória, com máximo declarado de até 256 MB, sem 64 bits e sem compartilhada; tabelas com máximo de até 100 mil; `_start` e `memory` exportados; sem seção `start`; segmentos de dados com deslocamento constante dentro da memória mínima; até 100 mil funções e 50 mil locais por função; LEB128 limitado a 5 bytes. Recusado não gasta o minuto, e a mensagem diz o motivo.
+
+Todo programa de aluno roda num worker criado dentro de um iframe `sandbox="allow-scripts"` sem `allow-same-origin` (`src/compiler/sandbox.ts`), com CSP sem rede. Origem opaca: lá dentro não há IndexedDB, caches, OPFS, `localStorage`, cookies nem seletor de arquivos, e `fetch` e `importScripts` falham. É a defesa caso uma falha no shim da WASI desse JavaScript ao programa: o gabarito e as gravações do painel ficam fora de alcance. O iframe nasce de `srcdoc` e recebe o código do worker por mensagem, então funciona sem rede. O teste do harness confere tudo isso por dentro do sandbox.
+
+Sem disco: o programa recebe só stdin, stdout e stderr em memória, nenhum diretório pré-aberto, nenhuma variável de ambiente e só `main` de argumento. `fopen`, `opendir` e `open` falham com erro da WASI e o programa segue. O compilador só enxerga a árvore virtual com os arquivos da resposta e os headers do toolchain: `#include` ou `#embed` de caminho absoluto ou subindo pastas não acha nada. Nomes de arquivo passam por `FILE_NAME`, sem pasta. Nada que o aluno manda vira caminho, URL ou script no professor. Testes em `src/compiler/wasi.test.ts` e `src/compiler/args.test.ts`.
+
+Os limites de tempo cobrem o carregamento: até 30 s para compilar e instanciar o módulo (um módulo feito para demorar a compilar morre aí), e o limite do programa só conta do início dele. A saída para em 1 MB no worker e de novo no painel, que trata o que volta do sandbox como não confiável. Dos testes ocultos o aluno só recebe "N de M": nem saída, nem erro, nem tempo. No caminho do executável, o professor não devolve log de compilação nenhum.
+
+**O que sobra:** o número de ocultos que passaram é um canal lateral (dá para testar hipóteses sobre a entrada, um bit por teste), limitado a 1 por minuto por equipe. Já existia com o código-fonte e não piora com o executável. A nota nunca usa o executável do aluno: a correção final compila no professor o código do documento da equipe.
 
 **Riscos aceitos:** identidades descartáveis podem bater o ponto cedo para ler a prova no modo `clock-in`, e multiplicar o limite de testes. O professor vê cada entrada no painel. Quem exige início sincronizado deve usar o modo "Todos juntos".
 
@@ -208,29 +224,36 @@ Pega janela por cima, prova minimizada, captura congelada ou de outra coisa, e d
 
 **Honestidade sobre os limites:** "impossível de burlar" não existe numa página web, e o produto não deve prometer isso. Quem controla a própria máquina pode, com esforço real, falsificar a captura e o selo no navegador, usar máquina virtual, ou olhar um celular. **Não detectável por uma página:** celular, segunda pessoa, máquina virtual, placa de captura, extensões, janelas excluídas da captura e cliente adulterado. Compensações: selo visual, gravação, cadeia de hash nos alertas, e um fiscal na sala.
 
-A prova só é enviada a quem já está pronto (tela, tela cheia, sem segundo monitor, rede isolada se exigida). Se a condição cair durante a prova, uma tela opaca cobre o conteúdo até corrigir.
+A prova só é enviada a quem já está pronto (tela, tela cheia, sem segundo monitor, rede isolada se exigida). Durante a prova, sair da tela cheia, segundo monitor e internet de volta cobrem o conteúdo com uma tela opaca até corrigir.
+
+**Queda do compartilhamento de tela:** decisão do dono, "continua sem tela, não pode é crashar". Durante a prova ela não bloqueia nada: gera o alerta grave `share-ended` como antes, mostra um aviso fixo no rodapé com **Compartilhar de novo**, e para gravador, miniatura e selo sem erro. Ao compartilhar de novo, tudo volta, e a gravação continua no próximo número de segmento. Quem reconecta sem tela ainda recebe a prova, se já a tinha. O selo só conta falha de quem está com a tela ligada, então a queda não vira `beacon-missing` em série.
+
+**Falhas no aluno:** nada pode deixar a sessão quebrada. Gravador que falha tenta de novo poucas vezes, espaçado. Disco cheio ou bloqueado: alertas e entregas ficam na memória e são reenviados ao reconectar, pedaços de gravação ficam na memória até 64 MB, e um aviso pede para não recarregar a página. Mensagem malformada do professor é ignorada. Conexão que cai no meio de um envio solta os botões presos e reenvia ao voltar.
 
 ## 10. Gravação
 
 `src/student/recorder.ts`, `src/teacher/Player.tsx`.
 
-- `MediaRecorder` em segmentos de 60 s, com 400 kbps, cerca de 180 MB por hora por aluno. Cada segmento toca sozinho, e uma perda custa só um pedaço.
+- `MediaRecorder` em segmentos de 60 s, numa cópia da trilha reduzida para até 1280×720 e 5 quadros por segundo, com 250 kbps: no máximo ~110 MB por hora por aluno. A captura original continua em resolução nativa, porque o selo precisa dela. Cada segmento toca sozinho, e uma perda custa só um pedaço.
 - O próximo segmento começa antes do anterior parar, então não há buraco.
 - Guarda no disco do aluno, envia em pedaços de 3 s, e apaga quando o professor confirma.
 - O professor só confirma o pedaço depois de gravado: na pasta da prova pelo programa ou, se o disco falhar, no IndexedDB. Se os dois falharem, não confirma, avisa no painel, e a conexão cai para o aluno reenviar dali. O trecho que caiu no navegador volta para o arquivo quando o segmento fecha e o disco responde.
 - O painel avisa quando o espaço vai acabar: menos de 2 GB livres, ou menos de 30 min no ritmo atual. Confere ao criar a sala e a cada 30 s, pelo programa ou por `navigator.storage.estimate()`.
 - O player não abre o que foi para a pasta, porque o programa não lê arquivos pela rede: o trecho se abre pela pasta.
 - O player refaz o arquivo com `mediabunny`, sem recodificar, para a busca funcionar.
-- Miniatura JPEG de 320 px a cada 3 s. Ao abrir um aluno, 1280 px a cada 1 s.
+- Miniatura de 320 px a cada 3 s, em WebP quando o navegador gera (JPEG senão). Ao abrir um aluno, 1280 px a cada 1 s.
+- Medido com `node tests/bandwidth/run.mjs` (Chrome capturando uma tela sintética de editor com digitação, 60 s): antes 716 KB por minuto por aluno (vídeo 570, miniatura 139, selo 7); depois 496 KB (vídeo 368, miniatura 121, selo 7), cerca de 31% a menos. Uma tela sintética pesa menos que o bitrate; tela que satura o bitrate cai pelo menos na proporção de 400 para 250 kbps.
 
 ## 11. Execução de código
 
 `src/compiler/`, com `@yowasp/clang` e `@bjorn3/browser_wasi_shim`.
 
 - **Rodar:** no navegador do aluno em WebAssembly. Se não der, cai para a máquina do professor, com limite de 1 a cada 5 s.
-- **Testar:** sempre na máquina do professor, 1 por minuto por pessoa ou grupo, com limite aplicado por ele. O aluno vê os exemplos por completo e, dos testes ocultos, só "N de M".
+- **Testar:** o aluno compila aqui mesmo, como no Rodar, e manda só o executável. Erro de compilação aparece na hora e não gasta o minuto. O professor confere o executável (seção 8) e roda as amostras e os ocultos com os mesmos limites. Sem compilador no aluno, vai o código e o professor compila, como antes. 1 por minuto por pessoa ou grupo, e no máximo **um teste pendente por equipe**: o segundo é recusado ("já tem um teste na fila") sem gastar o minuto. O aluno vê a posição na fila. Vê os exemplos por completo e, dos testes ocultos, só "N de M".
+- **Correção final:** sempre compila no professor, a partir do documento da equipe. O executável do aluno nunca vale nota.
+- **Fila do professor** (`shared/jobs.ts`): a correção final passa na frente de testes e execuções. Vagas de execução: metade dos núcleos, de 1 a 4 (cada uma pode usar 256 MB). Compiladores: um quarto dos núcleos e um por 4 GB de memória, de 1 a 2, cada um com o próprio worker do clang (C++ com STL passa de meio GB). Um teste com executável pronto não espera atrás de quem precisa compilar.
 - **Limites explícitos:** 256 MB de memória (`--max-memory`), 5 s, 1 MB de saída, compilação em até 60 s.
-- Cada execução tem seu worker, encerrado no limite de tempo.
+- Cada execução tem seu worker, encerrado no limite de tempo. No professor, ele nasce dentro do sandbox de origem opaca.
 - **Limites do compilador:** sem exceções de C++. `try/catch` compila, mas um `throw` executado encerra com mensagem clara, inclusive `vector::at` e `stoi`. Recursão profunda estoura antes do nativo. Sem rede, threads e arquivos.
 
 ## 12. Andamento e tempo
@@ -298,7 +321,15 @@ Decisão do dono, substituindo os grupos definidos pelo professor e a trava por 
 
 ## 15. Offline
 
-`public/sw.js`, `scripts/postbuild.mjs`. O service worker baixa tudo antes de instalar. O Workers limita cada arquivo a 25 MiB, então o compilador (72 MB) é publicado em gzip e aberto pelo service worker. Mantém as duas últimas versões, para uma aba em plena prova não perder arquivos. Payload de cerca de 30 MB pela rede.
+`public/sw.js`, `scripts/postbuild.mjs`, `src/lib/offline.ts`. O service worker baixa tudo antes de instalar. O Workers limita cada arquivo a 25 MiB, então o compilador (72 MB) é publicado em gzip e aberto pelo service worker. Payload de cerca de 30 MB pela rede.
+
+**Versão:** cada build tem um nome (data e commit curto) que aparece discreto no topo da página inicial, da prova e do painel (`<BuildVersion />`), junto do protocolo. O manifesto do precache guarda o nome e a `PROTOCOL_VERSION` de cada versão.
+
+**Atualização segura:** a versão nova baixa em segundo plano. Fora de prova, a página inicial avisa e aplica ao recarregar. Durante a prova, a aba nunca recarrega sozinha: ao receber a prova, a página fixa a própria versão, e um F5 abre a mesma. O service worker guarda as duas últimas versões, a fixada e qualquer uma que uma aba aberta diga estar usando.
+
+**Rebaixar ou subir para falar com o professor:** se o aluno for recusado com `version` e houver em cache uma versão com o protocolo do professor, a página fixa essa versão, recarrega nela e avisa. Durante a prova (o professor trocou de versão no meio), oferece a troca num aviso, com um clique. Sem versão compatível em cache, diz quem precisa atualizar. A fixação some quando o aluno sai da prova, e expira sozinha em 12 h.
+
+**Execução isolada sem rede:** o sandbox do professor (seção 8) não baixa nada: o código do worker vai dentro do próprio pacote, então não há arquivo extra no precache.
 
 ## 16. Decisões em aberto
 

@@ -89,5 +89,5 @@ main()
   })
   .finally(() => {
     procs.forEach(kill)
-    if (userDir) rmSync(userDir, { recursive: true, force: true })
+    if (userDir) rmSync(userDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 })
   })
