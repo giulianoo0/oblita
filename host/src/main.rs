@@ -578,7 +578,10 @@ async fn serve(token: String, app: Arc<App>) -> Result<(), String> {
         let _ = tcp.set_nodelay(true);
     });
 
-    log!("{LOGO}");
+    // Na tela de menu o logo já está no topo.
+    if log::to_stdout() {
+        log!("{LOGO}");
+    }
     log!("Oblita Host: tudo certo, o programa está rodando.");
     log!("");
     let addresses = lan_addresses();

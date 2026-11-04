@@ -45,6 +45,10 @@ pub fn init(to_stdout: bool) {
     let _ = LOG.set(tx);
 }
 
+pub fn to_stdout() -> bool {
+    TO_STDOUT.load(Ordering::Relaxed)
+}
+
 pub fn recent(count: usize) -> Vec<String> {
     let recent = RECENT.lock().unwrap_or_else(|e| e.into_inner());
     recent.iter().skip(recent.len().saturating_sub(count)).cloned().collect()

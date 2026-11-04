@@ -87,14 +87,15 @@ Cloudflare Worker (oblita.giuli.dev)
   estáticos + /healthz + /signal (Durable Object, só para o modo navegador)
 
 Máquina do professor
-  navegador: painel React, gabarito, correção, gravações (IndexedDB)
-  oblita-host.exe (Rust): só repassa bytes, porta 7787
+  navegador: painel React, gabarito, correção, estado da sala (IndexedDB)
+  oblita-host.exe (Rust): repassa bytes, porta 7787, e grava na pasta da prova o que o painel mandar
 
 Máquina do aluno
   navegador: página baixada, editor, vigia, gravação
 ```
 
 - **O painel do professor é o mesmo** nos dois modos. O hub não entende provas e nunca recebe a senha nem o gabarito.
+- **Com o programa**, gravações, respostas, notas e resumos vão para a pasta da prova enquanto a prova acontece. **Só navegador**, ou se o disco falhar, ficam no IndexedDB e saem pelo zip.
 - O servidor Elysia em `server/` é um dublê do hub para desenvolvimento e teste. O de produção é `host/`.
 - O Worker usa Elysia com `CloudflareAdapter` e um Durable Object `SignalRoom` por código de sala.
 
@@ -120,7 +121,9 @@ Definidos e validados em `shared/exam.ts`, documentados em `public/llms.txt`.
 
 **Quadros:** tudo é binário. Tag 1 JSON, tag 2 binário com cabeçalho, tag 3 cifrado.
 
-**Hub:** `[u32 conexão][u8 op][dados]`, op 0 abriu, 1 fechou, 2 dados. Endpoints: `GET /ping`, `GET /host-token` (só loopback e origem permitida), `WS /ws/host?token=`, `WS /ws/student`. Os alunos sobrevivem ao painel recarregar.
+**Hub:** `[u32 conexão][u8 op][dados]`, op 0 abriu, 1 fechou, 2 dados. Endpoints: `GET /ping`, `GET /host-token` (só loopback e origem permitida), `WS /ws/host?token=`, `WS /ws/student`, `WS /ws/files?token=`. Os alunos sobrevivem ao painel recarregar. O painel reconecta sozinho ao programa, com espera crescente até 15 s, quando a permissão de rede local já foi dada. Acima de 256 MiB na fila de envio da aba, o aluno daquela conexão cai e reenvia ao voltar.
+
+**Arquivos:** `src/teacher/fileLink.ts` e `host/src/files_ws.rs`. Pedido `[u32 id][u8 op][u64 offset][u16 tamanho][caminho][corpo]`, resposta `[u32 id][u8 situação][corpo]`. Ops: 1 escrever a partir de um ponto, 2 substituir inteiro, 4 apagar, 6 pasta e espaço livre, 7 prova encerrada e salva. O id 0 é aviso do programa (troca de pasta).
 
 **Fluxos confiáveis:** `event` (alertas, entregas, fim) e `rec` (gravação) têm numeração própria. O professor aceita só o próximo número e confirma; o aluno guarda em disco até a confirmação e reenvia ao reconectar. Alertas nunca esperam atrás de vídeo.
 
@@ -153,9 +156,20 @@ Implementação em `shared/secure.ts` e `shared/policy.ts`, com testes em `share
 
 **Hub:** `/ws/host` exige loopback e token. `/host-token` exige loopback e origem permitida (`HUB_ORIGINS`). Limite de conexões por IP, e um aluno abusivo cai sem levar o painel junto.
 
-**Painel resistente a aluno adulterado:** qualquer erro ao tratar uma mensagem derruba só aquela conexão. Campos numéricos e de tipo enumerado são conferidos, e horários vêm do relógio do professor. Documento Yjs adulterado é ignorado no que não for texto, sem impedir as outras equipes de encerrar. Salvamento em ritmo fixo de 1 s. Um número de sequência pulado (painel recarregou antes de salvar) é aceito e fica visível na cadeia de hash, em vez de travar o fluxo. Fila de correção com uma entrada por equipe e questão, retomada ao recarregar. Cota de 2 GiB de gravação por aluno.
+**Painel resistente a aluno adulterado:** qualquer erro ao tratar uma mensagem derruba só aquela conexão. Campos numéricos e de tipo enumerado são conferidos, e horários vêm do relógio do professor. Documento Yjs adulterado é ignorado no que não for texto, sem impedir as outras equipes de encerrar. Salvamento em ritmo fixo de 1 s, só das chaves que mudaram (`src/teacher/roomStore.ts`): o estático uma vez, cada documento de equipe quando muda, alunos, equipes e alertas em chaves próprias, tudo numa transação. A confirmação ao aluno só sai depois de salvo; se o salvamento falhar, ela espera a próxima volta. Um número de sequência pulado (painel recarregou antes de salvar) é aceito e fica visível na cadeia de hash, em vez de travar o fluxo. Fila de correção com uma entrada por equipe e questão, retomada ao recarregar. Cota de 2 GiB de gravação por aluno.
 
 **Riscos aceitos:** identidades descartáveis podem bater o ponto cedo para ler a prova no modo `clock-in`, e multiplicar o limite de testes. O professor vê cada entrada no painel. Quem exige início sincronizado deve usar o modo "Todos juntos".
+
+**Pasta da prova (`host/src/files.rs`):** o que o programa escreve, onde e com quais garantias.
+
+- **Onde:** só dentro da pasta escolhida pelo professor na tela do programa (padrão `Documentos/Oblita`, lembrada em `%APPDATA%/Oblita/host.json`). A rede nunca escolhe nem muda essa pasta. Tudo cai numa subpasta por prova, `<título> <data>`, que o programa cria com a marca `.oblita-sala`. Pasta sem a marca não é tocada, nem para escrever, nem para apagar.
+- **O quê:** a estrutura da §14. Vídeo é acrescentado ao arquivo do segmento a cada pedaço; texto é substituído inteiro, gravando num temporário ao lado e renomeando, com `fsync` antes.
+- **Só escrita:** nenhuma operação lê, lista, move ou devolve conteúdo de arquivo pela rede. Apagar vale só para arquivo dentro de sala marcada, e as pastas que ficam vazias somem junto.
+- **Quem:** `/ws/files` exige loopback, o token do painel e a origem em `HUB_ORIGINS`.
+- **Caminho:** só `/` separa, de 2 a 12 nomes, até 120 caracteres UTF-16 por nome e 400 no total. Recusa `..`, `.`, nome vazio, caminho absoluto, letra de unidade, UNC e `\\?\` (barra invertida, `:` e `?` são proibidos, o que também barra fluxo alternativo do NTFS), nome começando com ponto ou espaço, terminando com ponto ou espaço, nomes reservados do Windows (`CON`, `NUL`, `AUX`, `COM1`, `LPT9`, `COM¹`, `CONIN$`, também com extensão), caracteres de controle, invisíveis e de direção. Recusa em vez de corrigir: quem corrige é o painel, com `safeName` sobre nome do aluno, da equipe, dos arquivos de código e título da prova; a extensão do vídeo sai do mime e só pode ser `webm` ou `mp4`.
+- **Links:** cada pasta do caminho é conferida sem seguir link; link, junção ou qualquer ponto de nova análise do Windows é recusado. Arquivo novo abre com `create_new`; o existente abre sem seguir link (`O_NOFOLLOW`, `FILE_FLAG_OPEN_REPARSE_POINT`). Depois de abrir, o programa confere pelo próprio arquivo aberto que o caminho real continua dentro da raiz e é o mesmo arquivo (no macOS e Linux, dispositivo e inode; no Windows, hora de criação e tamanho, porque a std estável não expõe o índice do arquivo). A raiz também é conferida a cada pedido: trocada por link ou apagada, para tudo.
+- **Limites:** 2 GiB por arquivo, 32 MiB por pedido, 400 GiB e 50 000 arquivos por sala, e sempre 1 GiB livre no disco: a escrita que passaria disso é recusada. O uso da sala é recontado ao reabrir o programa.
+- **Limite conhecido:** quem já escreve na pasta da prova com a conta do professor pode trocar uma pasta por junção entre a conferência e a abertura; a conferência pelo arquivo aberto pega o caso comum, mas no Windows ela é por hora de criação e tamanho, não por índice. Não há teste automático de junção (criar uma exige Windows e o CI não testa isso ainda); o teste de link simbólico roda no macOS e no Linux.
 
 **Outras defesas:** saída de zip sanitizada contra `../` e nomes reservados do Windows. CSV neutraliza fórmulas. Enunciados e nomes só viram texto, nunca HTML. O CSP não está definido ainda (ver PLAN).
 
@@ -203,6 +217,9 @@ A prova só é enviada a quem já está pronto (tela, tela cheia, sem segundo mo
 - `MediaRecorder` em segmentos de 60 s, com 400 kbps, cerca de 180 MB por hora por aluno. Cada segmento toca sozinho, e uma perda custa só um pedaço.
 - O próximo segmento começa antes do anterior parar, então não há buraco.
 - Guarda no disco do aluno, envia em pedaços de 3 s, e apaga quando o professor confirma.
+- O professor só confirma o pedaço depois de gravado: na pasta da prova pelo programa ou, se o disco falhar, no IndexedDB. Se os dois falharem, não confirma, avisa no painel, e a conexão cai para o aluno reenviar dali. O trecho que caiu no navegador volta para o arquivo quando o segmento fecha e o disco responde.
+- O painel avisa quando o espaço vai acabar: menos de 2 GB livres, ou menos de 30 min no ritmo atual. Confere ao criar a sala e a cada 30 s, pelo programa ou por `navigator.storage.estimate()`.
+- O player não abre o que foi para a pasta, porque o programa não lê arquivos pela rede: o trecho se abre pela pasta.
 - O player refaz o arquivo com `mediabunny`, sem recodificar, para a busca funcionar.
 - Miniatura JPEG de 320 px a cada 3 s. Ao abrir um aluno, 1280 px a cada 1 s.
 
@@ -265,10 +282,12 @@ Decisão do dono, substituindo os grupos definidos pelo professor e a trava por 
 
 ## 14. Exportação
 
-`src/teacher/exportZip.ts`. Zip sem compressão com ZIP64, gravado direto no disco. Sem a API de salvar em disco, vai sem vídeo.
+`src/teacher/layout.ts` define a estrutura, a mesma no zip e na pasta da prova. Com o programa, a pasta é gravada durante a prova: vídeo a cada pedaço, texto no máximo a cada 3 s quando muda, e o que sai da estrutura (como `sem-resposta.txt` de quem respondeu) é apagado. Quando a prova encerra, a correção termina e nada ficou no navegador, o painel e o programa mostram "Tudo salvo em <pasta>".
+
+`src/teacher/exportZip.ts`: o zip, para o modo só navegador e para o que ficou no IndexedDB. Sem compressão, com ZIP64, gravado direto no disco. Sem a API de salvar em disco, vai sem vídeo.
 
 ```
-<título>.zip
+<título>.zip  ou  <pasta escolhida>/<título> <data>/
   resumo.csv, prova.json
   alunos/<nome (matrícula)>/
     resumo.txt, alertas.csv, gravacao/0000.mp4
