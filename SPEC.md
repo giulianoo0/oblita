@@ -48,6 +48,7 @@ O corte de rede é feito pela infraestrutura da sala, não pelo aluno. O aluno n
 - **Terminal sempre disponível para rodar o programa.**
 - Bate o ponto quando quiser, e o relógio é sincronizado com o do professor.
 - **Teste: 1 por minuto**, e roda na máquina do professor.
+- A tela da prova é feita de blocos (enunciado, código, entrada e saída; ou enunciado e resposta): cada um recolhe numa faixa, as divisórias redimensionam (com limite por bloco, setas e duplo clique para o padrão), e o cabeçalho arrasta o bloco para o lado, para baixo ou para trocar de lugar, com prévia do destino. Esc ou soltar fora cancela. O menu de cada bloco faz o mesmo pelo teclado, e o do topo restaura o padrão. Um bloco fica sempre aberto. O layout fica guardado por prova no navegador; salvo inválido volta ao padrão (`src/student/blocks.ts`). Em tela estreita os blocos empilham na ordem do layout.
 
 ### Vigilância
 Abrir DevTools, sair da aba ou qualquer macete gera aviso instantâneo para o professor.
