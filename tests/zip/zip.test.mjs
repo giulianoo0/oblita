@@ -16,6 +16,7 @@ import ts from 'typescript'
 registerHooks({
   resolve(spec, ctx, next) {
     if (spec.endsWith('?worker')) return { url: 'data:text/javascript,export default class {}', shortCircuit: true }
+    if (spec.startsWith('virtual:')) return { url: 'data:text/javascript,export default ""', shortCircuit: true }
     if (/^\.\.?\//.test(spec) && !extname(spec) && ctx.parentURL?.startsWith('file:')) {
       const base = fileURLToPath(new URL(spec, ctx.parentURL))
       for (const e of ['.ts', '.tsx']) if (existsSync(base + e)) return { url: pathToFileURL(base + e).href, shortCircuit: true }
