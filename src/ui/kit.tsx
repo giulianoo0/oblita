@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import { IMAGE_MARKDOWN } from '../../shared/exam'
 import { formatClock } from '../lib/store'
+import { Eagle } from './Eagle'
 import './dia.css'
 
 const pop = { type: 'spring', bounce: 0.25, duration: 0.6 } as const
@@ -24,6 +25,7 @@ export function Pill({ tone = 'soft', size = 'md', icon, className = '', ...rest
 export function Logo({ size = 1.5 }: { size?: number }) {
   return (
     <Link to="/" className="logo" style={{ fontSize: `${size}rem` }} aria-label="oblita">
+      <Eagle still size="1.15em" className="logo-eagle" />
       oblita<i>_</i>
     </Link>
   )

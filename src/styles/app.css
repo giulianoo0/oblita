@@ -122,6 +122,9 @@ textarea.input { height: auto; min-height: 5.5rem; padding: 0.625rem 0.875rem; r
 
 .logo { display: inline-flex; align-items: baseline; font-family: var(--font-serif); font-weight: 600; letter-spacing: -0.03em; line-height: 1; color: var(--text); text-decoration: none; }
 .logo i { font-style: normal; color: var(--brand); }
+/* A águia parada no logo: a animada fica só na página inicial, para não distrair na prova. */
+.logo-eagle { align-self: center; margin-right: 0.3em; translate: 0 -0.04em; }
+.home-eagle { margin: 0 auto 0.5rem; }
 
 /* ---------- home ---------- */
 .home { min-height: 100%; display: flex; flex-direction: column; }

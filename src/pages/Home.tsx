@@ -6,6 +6,7 @@ import { idb } from '../lib/idb'
 import { unpinBuild, useOffline } from '../lib/offline'
 import { parseAddress } from '../net/link'
 import { BuildVersion } from '../ui/BuildVersion'
+import { Eagle } from '../ui/Eagle'
 import { Logo, Pill } from '../ui/kit'
 
 // O lucide não traz mais logos de marca: o do GitHub vai aqui, em 16 px.
@@ -90,6 +91,7 @@ export function Home() {
         </div>
       </header>
       <main className="home-hero">
+        <Eagle size={112} className="home-eagle" />
         <h1 className="home-title">
           provas online de código <span className="home-word">sem cola.</span>
         </h1>
