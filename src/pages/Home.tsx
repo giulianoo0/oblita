@@ -2,7 +2,8 @@ import { AnimatePresence, motion } from 'motion/react'
 import { ArrowRight, Check, CloudDownload, GraduationCap, Presentation, TriangleAlert } from 'lucide-react'
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { useOffline } from '../lib/offline'
+import { idb } from '../lib/idb'
+import { unpinBuild, useOffline } from '../lib/offline'
 import { parseAddress } from '../net/link'
 import { BuildVersion } from '../ui/BuildVersion'
 import { Logo, Pill } from '../ui/kit'
@@ -50,6 +51,14 @@ export function Home() {
   const [role, setRole] = useState<'student' | null>(null)
   const [ip, setIp] = useState('')
   const [invalid, setInvalid] = useState(false)
+
+  // Sem prova em andamento neste computador, nenhuma versão precisa ficar fixada.
+  useEffect(() => {
+    void idb
+      .get<{ active?: boolean }>('kv', 'student')
+      .then((s) => !s?.active && unpinBuild())
+      .catch(() => {})
+  }, [])
 
   useEffect(() => {
     try {
