@@ -633,8 +633,27 @@ fn arg_value(args: &[String], name: &str) -> Option<String> {
 // Acentos: a std do Rust escreve no console com WriteConsoleW, então não precisa de chcp 65001.
 // O hub roda numa thread própria; a principal fica com a tela, porque o diálogo de pasta do macOS
 // só abre na thread principal.
+const HELP: &str = "\
+Oblita Host: o programa de rede local do professor.
+
+Uso: oblita-host [opções]
+
+Sem opções, abre a tela com menu e grava na pasta escolhida da última vez
+(Documentos\\Oblita na primeira vez).
+
+Opções:
+  --pasta <caminho>  grava nesta pasta só desta vez, sem mudar a escolha salva
+  --porta <número>   escuta nesta porta em vez da 7787 (para testes)
+  --plain            sem a tela de menu: só o registro, linha a linha
+  --help, -h         mostra esta ajuda
+";
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().skip(1).any(|a| matches!(a.as_str(), "--help" | "-h" | "/?")) {
+        print!("{HELP}");
+        return;
+    }
     // Sem terminal (saída redirecionada, como no CI), a tela de menu não teria onde desenhar.
     let plain = args.iter().any(|a| a == "--plain") || !io::stdout().is_terminal() || !io::stdin().is_terminal();
     log::init(plain);
