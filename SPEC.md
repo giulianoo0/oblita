@@ -168,7 +168,7 @@ Implementação em `shared/secure.ts` e `shared/policy.ts`, com testes em `share
 
 Todo programa de aluno roda num worker criado dentro de um iframe `sandbox="allow-scripts"` sem `allow-same-origin` (`src/compiler/sandbox.ts`), com CSP sem rede. Origem opaca: lá dentro não há IndexedDB, caches, OPFS, `localStorage`, cookies nem seletor de arquivos, e `fetch` e `importScripts` falham. É a defesa caso uma falha no shim da WASI desse JavaScript ao programa: o gabarito e as gravações do painel ficam fora de alcance. O iframe nasce de `srcdoc` e recebe o código do worker por mensagem, então funciona sem rede. O teste do harness confere tudo isso por dentro do sandbox.
 
-Sem disco: o programa recebe só stdin, stdout e stderr em memória, nenhum diretório pré-aberto, nenhuma variável de ambiente e só `main` de argumento. `fopen`, `opendir` e `open` falham com erro da WASI e o programa segue. O compilador só enxerga a árvore virtual com os arquivos da resposta e os headers do toolchain: `#include` ou `#embed` de caminho absoluto ou subindo pastas não acha nada. Nomes de arquivo passam por `FILE_NAME`, sem pasta. Nada que o aluno manda vira caminho, URL ou script no professor. Testes em `src/compiler/wasi.test.ts` e `src/compiler/args.test.ts`.
+Sem disco: o programa recebe só stdin, stdout e stderr em memória, nenhum diretório pré-aberto, nenhuma variável de ambiente e só `main` de argumento. `fopen`, `opendir` e `open` falham com erro da WASI e o programa segue. O compilador só enxerga a árvore virtual com os arquivos da resposta e os headers do toolchain: `#include` ou `#embed` de caminho absoluto ou subindo pastas não acha nada. Caminhos de arquivo passam por `validPath` (`shared/protocol.ts`): só `/` separa, até 3 pastas e 120 caracteres, cada nome com a regra de `FILE_NAME` (pasta sem extensão), sem `..`, `.`, nome vazio, barra invertida, letra de unidade nem nome reservado do Windows, e um nome não pode ser arquivo e pasta ao mesmo tempo. O compilador monta a árvore aninhada e deixa de fora qualquer caminho inválido; a WASI do clang não resolve `..`, então `#include` só alcança a própria pasta e as de dentro. Nada que o aluno manda vira caminho, URL ou script no professor. Testes em `src/compiler/wasi.test.ts` e `src/compiler/args.test.ts`.
 
 Os limites de tempo cobrem o carregamento: até 30 s para compilar e instanciar o módulo (um módulo feito para demorar a compilar morre aí), e o limite do programa só conta do início dele. A saída para em 1 MB no worker e de novo no painel, que trata o que volta do sandbox como não confiável. Dos testes ocultos o aluno só recebe "N de M": nem saída, nem erro, nem tempo. No caminho do executável, o professor não devolve log de compilação nenhum.
 
@@ -298,7 +298,8 @@ Decisão do dono, substituindo os grupos definidos pelo professor e a trava por 
 - **Ctrl+Z / Cmd+Z** usa `Y.UndoManager`, que desfaz só o que a própria pessoa fez, sem apagar o que o colega escreveu. Refazer com Ctrl+Y e Ctrl+Shift+Z / Cmd+Shift+Z.
 - Quem fica sem rede continua editando. Ao voltar, troca-se o vetor de estado e tudo se mescla, sem conflito.
 - O professor semeia o código inicial. Os alunos nunca semeiam, senão dois integrantes duplicariam o texto.
-- Criar, renomear e apagar arquivos também é compartilhado. Renomear copia o texto para a nova chave, e não entra no desfazer.
+- Criar, renomear e apagar arquivos e pastas também é compartilhado. Renomear copia o texto para a nova chave, e não entra no desfazer. Os arquivos ficam por caminho (`lib/util.h`) em `files:<questão>`; pasta vazia fica em `dirs:<questão>`. Renomear ou apagar pasta mexe em tudo de dentro numa transação, e quem estava num arquivo dela vai junto.
+- A lista de arquivos é uma árvore (`src/student/FileExplorer.tsx`): pastas primeiro, ordem alfabética, recolhíveis, F2 ou duplo clique renomeia, Delete apaga com confirmação que diz quantos arquivos saem junto. O único arquivo de código não pode ser apagado, nem a pasta que tem todos. Header novo nasce com `#pragma once`.
 - O professor guarda o documento da equipe e extrai dele o que vê, corrige e exporta.
 - Múltipla escolha e texto continuam com a última edição valendo, porque não precisam de mescla.
 - As mensagens de cursor passam só entre a equipe, e não são salvas.
@@ -314,7 +315,7 @@ Decisão do dono, substituindo os grupos definidos pelo professor e a trava por 
   resumo.csv, prova.json
   alunos/<nome (matrícula)>/
     resumo.txt, alertas.csv, gravacao/0000.mp4
-    q1/main.cpp, q1/nota.txt
+    q1/main.cpp, q1/lib/util.h, q1/nota.txt   (subpastas do aluno, cada nome pelo safeName)
   grupos/<grupo>/
     resumo.txt, q1/..., <integrante (matrícula)>/alertas.csv, .../gravacao/
 ```
