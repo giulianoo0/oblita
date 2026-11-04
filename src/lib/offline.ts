@@ -1,6 +1,6 @@
 // Instalação da página: uma visita com internet e ela passa a abrir sozinha, sem rede.
 import { useEffect, useState } from 'react'
-import { requestPersistence } from './idb'
+import { idb, requestPersistence } from './idb'
 
 export type OfflineState = { status: 'unsupported' | 'installing' | 'ready' | 'error'; done: number; total: number; update: string | null }
 
@@ -42,6 +42,10 @@ export function startOffline() {
       ;(reg.active ?? navigator.serviceWorker.controller)?.postMessage({ type: 'precache-status' })
       const [newest] = (await cachedBuilds()) ?? []
       if (newest && newest.build !== BUILD.id && !(await pinnedBuild())) set({ ...state, update: newest.build })
+      // O navegador só procura sw.js novo ao navegar: uma aba que fica aberta procura sozinha.
+      const check = () => void reg.update().catch(() => {})
+      document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && check())
+      setInterval(check, 30 * 60 * 1000)
     })
     .catch(() => set({ ...state, status: 'error' }))
 }
@@ -72,6 +76,18 @@ export const pinnedBuild = () => ask<{ build: string; reason: 'exam' | 'version'
 // Durante a prova, um F5 abre esta mesma versão, mesmo que uma nova tenha sido baixada.
 export const pinBuild = (build: string, reason: 'exam' | 'version') => ask<boolean>({ type: 'pin', build, reason })
 export const unpinBuild = () => ask<boolean>({ type: 'unpin' })
+
+// Recarregar na versão nova. Sem prova em andamento, solta antes a versão fixada: senão o F5
+// abriria de novo a fixada e a atualização pareceria não pegar.
+export async function applyUpdate() {
+  try {
+    const student = await idb.get<{ active?: boolean }>('kv', 'student')
+    if (!student?.active) await unpinBuild()
+  } catch {
+    // Sem como saber se há prova: recarrega sem mexer na fixação.
+  }
+  location.reload()
+}
 
 export type VersionFix = { kind: 'switch'; build: CachedBuild } | { kind: 'update' } | { kind: 'teacher-old' }
 

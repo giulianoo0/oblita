@@ -51,4 +51,8 @@ const { id: build, protocol } = JSON.parse(readFileSync(join(DIST, 'build.json')
 if (!build || !Number.isInteger(protocol)) throw new Error('build.json sem versão ou protocolo')
 const version = hash.digest('hex').slice(0, 16)
 writeFileSync(join(DIST, 'precache.json'), JSON.stringify({ version, build, protocol, files }))
+// O navegador só instala um service worker novo, e com ele baixa a versão nova, quando o sw.js muda
+// byte a byte. Sem este carimbo o sw.js sai igual em todo deploy e ninguém atualiza.
+const sw = join(DIST, 'sw.js')
+writeFileSync(sw, `// versão ${version} (${build}, protocolo ${protocol})\n${readFileSync(sw, 'utf8')}`)
 console.log(`precache ${version} (${build}, protocolo ${protocol}): ${files.length} arquivos`)

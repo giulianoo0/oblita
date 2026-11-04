@@ -50,11 +50,11 @@ async function precache() {
     for (;;) {
       const entry = queue.shift()
       if (!entry) return
-      if (!(await caches.match(entry.url, { cacheName: cache.name })) && !(entry.url !== '/' && (await caches.match(entry.url)))) {
-        await cache.put(entry.url, await fetchEntry(entry))
-      } else if (!(await cache.match(entry.url))) {
-        // Arquivo com hash igual ao da versão anterior: copia sem baixar de novo.
-        await cache.put(entry.url, await caches.match(entry.url))
+      if (!(await cache.match(entry.url))) {
+        // Só o que tem hash no nome (/assets/) é igual entre versões e pode ser copiado. A página,
+        // o llms.txt e os ícones têm o mesmo endereço em toda versão e vêm sempre da rede.
+        const previous = entry.url.startsWith('/assets/') ? await caches.match(entry.url) : undefined
+        await cache.put(entry.url, previous ?? (await fetchEntry(entry)))
       }
       progress.done++
       await broadcast({ type: 'precache', ...progress })
@@ -193,5 +193,8 @@ self.addEventListener('fetch', (event) => {
     )
     return
   }
-  event.respondWith(caches.match(url.pathname).then((hit) => hit ?? fetch(request)))
+  // Com hash no nome, qualquer versão serve. O resto (ícones, card) tem o mesmo endereço em toda
+  // versão, e caches.match acharia a mais antiga: vem da versão em uso.
+  const hit = url.pathname.startsWith('/assets/') ? caches.match(url.pathname) : pageCache().then((cache) => cache?.match(url.pathname))
+  event.respondWith(hit.then((found) => found ?? fetch(request)))
 })

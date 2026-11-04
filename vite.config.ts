@@ -30,6 +30,8 @@ function runWorkerSource(): Plugin {
 
 // Data e commit curto: é o que aparece no canto da tela para conferir que todos estão iguais.
 function buildId() {
+  // Para testes: duas builds com versões diferentes sem precisar de dois commits (e2e/update.mjs).
+  if (process.env.OBLITA_BUILD_ID) return process.env.OBLITA_BUILD_ID
   const day = new Date().toISOString().slice(0, 10)
   try {
     return `${day}-${execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim()}`
