@@ -344,6 +344,7 @@ async function run() {
   await reset()
 
   // ---- cursores com nome e nome hostil
+  await t('b', `t.session.awareness.setLocalStateField('user', { name: window.parent.__host.HOSTILE })`)
   await clickAt('b', 2, 5)
   await sleep(150)
   const bId = await t('b', 't.session.awareness.clientID')

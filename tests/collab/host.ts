@@ -53,11 +53,12 @@ const host = {
   },
   ready: false,
 }
-Object.assign(window, { __host: host })
-
+// O nome hostil entra só no teste dele (run.mjs): nas outras telas o colega tem um nome comum.
 const HOSTILE = '"};body{display:none}/*'
+Object.assign(window, { __host: Object.assign(host, { HOSTILE }) })
+
 frame('a').src = '/tests/collab/peer.html?id=a&name=Ana'
-frame('b').src = `/tests/collab/peer.html?id=b&name=${encodeURIComponent(HOSTILE)}`
+frame('b').src = '/tests/collab/peer.html?id=b&name=Bruno'
 
 let loaded = 0
 for (const id of ['a', 'b']) {
