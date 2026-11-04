@@ -438,7 +438,9 @@ impl Store {
     // A sala inteira, para o aviso de "Tudo salvo". Só confirma o que existe e é sala nossa.
     pub fn room_path(&mut self, room: &str) -> Result<PathBuf, FileError> {
         check_room(room)?;
-        self.room_dir(room, false)
+        self.room_dir(room, false)?;
+        // O caminho como o professor escolheu, sem o "\\?\" que o canônico ganha no Windows.
+        Ok(self.root.join(room))
     }
 }
 

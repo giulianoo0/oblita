@@ -19,7 +19,7 @@ use ratatui::{
     DefaultTerminal, Frame,
 };
 
-use crate::{app::App, HUB_PORT};
+use crate::app::App;
 
 const LOGO: [&str; 5] = [
     "        _     _ _ _",
@@ -250,7 +250,7 @@ fn status_lines(app: &App, screen: &Screen) -> Vec<Line<'static>> {
         lines.push(Line::styled("  nenhuma rede encontrada; conecte ao Wi-Fi ou ao cabo", Style::default().fg(Color::Red)));
     }
     for (name, ip) in &screen.addresses {
-        lines.push(Line::from(vec![Span::styled(format!("  {ip}:{HUB_PORT}"), Style::default().add_modifier(Modifier::BOLD)), Span::styled(format!("  ({name})"), off)]));
+        lines.push(Line::from(vec![Span::styled(format!("  {ip}:{}", crate::port()), Style::default().add_modifier(Modifier::BOLD)), Span::styled(format!("  ({name})"), off)]));
     }
     lines
 }

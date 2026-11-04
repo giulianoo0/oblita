@@ -43,6 +43,12 @@ use tokio::{
 };
 
 const HUB_PORT: u16 = 7787;
+// Outra porta só com --porta, para testar com outro hub já aberto na 7787.
+static PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(HUB_PORT);
+
+pub fn port() -> u16 {
+    PORT.load(Ordering::Relaxed)
+}
 const HUB_ORIGINS: [&str; 3] = ["https://oblita.giuli.dev", "http://localhost:5173", "http://localhost:3000"];
 const MAX_STUDENTS: usize = 512;
 // Um notebook com sockets crus não pode ocupar todas as vagas. Vale também para o loopback.
@@ -517,7 +523,7 @@ fn ensure_firewall() {
         log!("Firewall: regra deste programa já existe.");
         return;
     }
-    let port = format!("localport={HUB_PORT}");
+    let port = format!("localport={}", port());
     let added = netsh(&[
         "add",
         "rule",
@@ -553,19 +559,21 @@ const LOGO: &str = r"
 fn explain_bind(error: io::Error) -> String {
     match error.kind() {
         io::ErrorKind::AddrInUse => format!(
-            "A porta {HUB_PORT} já está em uso, provavelmente porque o Oblita Host já está aberto.\n\
-             Procure a outra janela e use aquela, ou feche-a e abra este programa de novo."
+            "A porta {} já está em uso, provavelmente porque o Oblita Host já está aberto.\n\
+             Procure a outra janela e use aquela, ou feche-a e abra este programa de novo.",
+            port()
         ),
         io::ErrorKind::PermissionDenied => format!(
-            "O Windows não deixou usar a porta {HUB_PORT} ({error}).\n\
-             Reinicie o computador e tente de novo; se continuar, abra como administrador."
+            "O Windows não deixou usar a porta {} ({error}).\n\
+             Reinicie o computador e tente de novo; se continuar, abra como administrador.",
+            port()
         ),
-        _ => format!("Não foi possível abrir a porta {HUB_PORT}: {error}.\nReinicie o computador e tente de novo."),
+        _ => format!("Não foi possível abrir a porta {}: {error}.\nReinicie o computador e tente de novo.", port()),
     }
 }
 
 async fn serve(token: String, app: Arc<App>) -> Result<(), String> {
-    let address = SocketAddr::from((Ipv4Addr::UNSPECIFIED, HUB_PORT));
+    let address = SocketAddr::from((Ipv4Addr::UNSPECIFIED, port()));
     let listener = TcpListener::bind(address).await.map_err(explain_bind)?.tap_io(|tcp| {
         let _ = tcp.set_nodelay(true);
     });
@@ -579,7 +587,7 @@ async fn serve(token: String, app: Arc<App>) -> Result<(), String> {
     } else {
         log!("Os alunos devem digitar um destes endereços (use o da rede em que eles estão):");
         for (name, ip) in &addresses {
-            log!("    {ip}:{HUB_PORT}    ({name})");
+            log!("    {ip}:{}    ({name})", port());
         }
     }
     log!("");
@@ -631,6 +639,9 @@ fn main() {
 
     // Para testar: a pasta vale só desta vez e não é salva.
     let chosen = arg_value(&args, "--pasta").map(PathBuf::from);
+    if let Some(port) = arg_value(&args, "--porta").and_then(|p| p.parse::<u16>().ok()) {
+        PORT.store(port, Ordering::Relaxed);
+    }
     let config_file = config::config_path();
     let folder = chosen.clone().unwrap_or_else(|| match &config_file {
         Some(file) => config::load(file, config::default_folder()).folder,
