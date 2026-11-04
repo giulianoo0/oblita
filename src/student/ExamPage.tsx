@@ -236,7 +236,6 @@ function ConnectStep() {
             </Pill>
           </>
         )}
-        <BuildVersion />
       </form>
     </div>
   )

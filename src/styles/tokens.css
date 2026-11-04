@@ -38,8 +38,8 @@
   --line: rgb(0 0 0 / 8%);
   --line-strong: rgb(0 0 0 / 14%);
   --field: color-mix(in oklab, #111 5%, transparent);
-  --primary: var(--sky-500);
-  --primary-hover: var(--sky-600);
+  --primary: var(--indigo-500);
+  --primary-hover: var(--indigo-600);
   --on-primary: #fff;
   --brand: var(--indigo-500);
   --brand-hover: var(--indigo-600);
@@ -117,9 +117,9 @@
     --line: rgb(255 255 255 / 7%);
     --line-strong: rgb(255 255 255 / 12%);
     --field: color-mix(in oklab, #fff 4%, transparent);
-    --primary: var(--sky-400);
-    --primary-hover: var(--sky-300);
-    --on-primary: oklch(0.15 0.03 262);
+    --primary: var(--indigo-450);
+    --primary-hover: var(--indigo-400);
+    --on-primary: #fff;
     --brand: var(--indigo-450);
     --brand-hover: var(--indigo-400);
     --danger: var(--red-500);
