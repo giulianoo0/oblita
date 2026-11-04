@@ -35,19 +35,19 @@ Video sintetico 250-400 kbps por aluno (pedacos de 3 s), miniatura a cada 3 s, Y
 
 | Metrica | Valor |
 |---|---|
-| RSS maximo do hub | ~46 MiB (estavel, sem crescer) |
-| RSS final | ~46 MiB |
-| CPU medio / maximo do hub | ~3% / ~4% de 1 nucleo |
-| Latencia event->ack (ida e volta) p50 | ~8 ms |
-| Latencia p99 | ~110 ms (CPU do simulador com 100 canais cifrados, nao do hub) |
-| Latencia maxima | ~120 ms |
-| Video repassado | ~2,3 GiB em 12 min (~3,3 MiB/s) |
+| RSS maximo do hub | 46,5 MiB (40,4 aos 30 s, plano a partir de 2 min) |
+| RSS final | 46,5 MiB |
+| CPU medio / maximo do hub | 3,3% / 4,0% de 1 nucleo |
+| Latencia event->ack (ida e volta) p50 | 4,7 ms (35 900 amostras) |
+| Latencia p99 | 59,3 ms (inclui cifra e fila do simulador, nao so o hub) |
+| Latencia maxima | 110 ms |
+| Video repassado | 2,73 GiB em 12 min (~3,9 MiB/s) |
 | Alunos conectados ao longo do teste | 100 estaveis |
-| Testes (wasm) processados | ~1300 (ok + invalidos) |
+| Testes (wasm) processados | 719 (576 ok, 143 invalidos recusados) |
 
-RSS plano do comeco ao fim: nada cresce sem limite. O hub so repassa bytes; as filas de envio sao limitadas (STUDENT_QUEUE_BYTES 64 MiB, HOST_QUEUE_BYTES 256 MiB, IP_SHARE_BYTES 32 MiB por IP) e devolvem os bytes ao sair da fila (Charge/Drop).
+RSS sobe de 40 para 46 MiB nos 2 primeiros minutos (buffers do tokio e das filas aquecendo) e fica plano nos 10 minutos seguintes: nada cresce sem limite. O hub so repassa bytes; as filas de envio sao limitadas (STUDENT_QUEUE_BYTES 64 MiB, HOST_QUEUE_BYTES 256 MiB, IP_SHARE_BYTES 32 MiB por IP) e devolvem os bytes ao sair da fila (Charge/Drop).
 
-Painel/aluno lento: um painel que faz o upgrade e nao le, com um aluno despejando video a toda: o aluno e derrubado assim que sua parte da fila do painel passa de 32 MiB (IP_SHARE_BYTES), o hub continua de pe e o RSS fica em ~40 MiB. O painel nunca cai por excesso de dados.
+Painel/aluno lento: um painel que faz o upgrade e nao le, com um aluno despejando video a toda: o aluno e derrubado assim que sua parte da fila do painel passa de 32 MiB (IP_SHARE_BYTES), o hub continua de pe e o RSS pico fica em 43,5 MiB. O painel nunca cai por excesso de dados.
 
 ## Achados e consertos
 
