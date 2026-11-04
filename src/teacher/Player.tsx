@@ -123,6 +123,7 @@ export default function Player({ room, student, seekTo, alerts }: { room: Room; 
   const [playing, setPlaying] = useState(false)
   const [loading, setLoading] = useState(false)
   const [failed, setFailed] = useState(false)
+  const [onDisk, setOnDisk] = useState<string | null>(null)
   const [speed, setSpeed] = useState(1)
   const [drag, setDrag] = useState<number | null>(null)
 
@@ -156,6 +157,18 @@ export default function Player({ room, student, seekTo, alerts }: { room: Room; 
       setPlaying(play)
       setFailed(false)
       setPos(seg.startedAt + offset)
+      // O programa só escreve: o que foi para a pasta da prova se abre por lá, não aqui.
+      if (seg.disk) {
+        ++loadId.current
+        loadedKey.current = null
+        v.removeAttribute('src')
+        v.load()
+        setBusy(false)
+        setPlaying(false)
+        setOnDisk(seg.file ?? '')
+        return
+      }
+      setOnDisk(null)
       if (loadedKey.current === key) {
         if (metaPending.current) {
           pendingOffset.current = offset / 1000
@@ -351,6 +364,12 @@ export default function Player({ room, student, seekTo, alerts }: { room: Room; 
     <div className="player">
       <video ref={video} muted playsInline onClick={toggle} onLoadedMetadata={onMeta} onDurationChange={onDuration} onTimeUpdate={onTime} onEnded={onEnded} onError={onError} />
       {loading && <Loader2 size={26} className="spin player-spin" />}
+      {onDisk !== null && (
+        <div className="player-empty player-over">
+          <VideoOff size={22} />
+          <span>Este trecho está na pasta da prova{onDisk ? `: ${onDisk}` : ''}</span>
+        </div>
+      )}
       {failed && (
         <div className="player-empty player-over">
           <VideoOff size={22} />

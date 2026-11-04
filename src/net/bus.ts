@@ -5,10 +5,14 @@ import { DataPipe, RTC_CONFIG, signalUrl, waitIce } from './rtc'
 import { parseAddress, pingHub } from './link'
 
 const MAX_RTC_PEERS = 512
+// O que a aba pode ter na fila para o programa. Acima disso o programa está travado ou lento,
+// e crescer a memória da aba só adia a queda dela. A prova inteira para um aluno cabe folgada.
+const MAX_BUFFERED = 256 * 1024 * 1024
 
 export interface Bus {
   kind: 'hub' | 'rtc'
-  send(peer: string, frame: Uint8Array): void
+  // false quando não saiu: conexão fechada, ou fila cheia e o aluno foi derrubado.
+  send(peer: string, frame: Uint8Array): boolean
   buffered(peer: string): number
   drop(peer: string): void
   close(): void
@@ -20,7 +24,8 @@ export interface Bus {
 
 export type BusInfo = { kind: 'hub'; address: string } | { kind: 'rtc'; code: string }
 
-export async function connectHubBus(address: string, token: string): Promise<Bus> {
+export async function connectHubBus(address: string, token: string, opts: { maxBuffered?: number } = {}): Promise<Bus> {
+  const maxBuffered = opts.maxBuffered ?? MAX_BUFFERED
   const parsed = parseAddress(address) ?? { host: 'localhost', port: HUB_PORT }
   await pingHub(parsed.host, parsed.port, 2500)
   return new Promise((resolve, reject) => {
@@ -28,7 +33,16 @@ export async function connectHubBus(address: string, token: string): Promise<Bus
     ws.binaryType = 'arraybuffer'
     const bus: Bus = {
       kind: 'hub',
-      send: (peer, frame) => ws.readyState === WebSocket.OPEN && ws.send(encodeHub(Number(peer), HubOp.data, frame)),
+      send: (peer, frame) => {
+        if (ws.readyState !== WebSocket.OPEN) return false
+        // O aluno reenvia ao reconectar o que não foi confirmado: event e rec são fluxos confiáveis.
+        if (ws.bufferedAmount + frame.length > maxBuffered) {
+          ws.send(encodeHub(Number(peer), HubOp.close))
+          return false
+        }
+        ws.send(encodeHub(Number(peer), HubOp.data, frame))
+        return true
+      },
       buffered: () => ws.bufferedAmount,
       drop: (peer) => ws.readyState === WebSocket.OPEN && ws.send(encodeHub(Number(peer), HubOp.close)),
       close: () => ws.close(),
@@ -59,7 +73,12 @@ export function connectRtcBus(code: string): Promise<Bus> {
     const peers = new Map<string, { pc: RTCPeerConnection; pipe?: DataPipe }>()
     const bus: Bus = {
       kind: 'rtc',
-      send: (peer, frame) => peers.get(peer)?.pipe?.send(frame),
+      send: (peer, frame) => {
+        const pipe = peers.get(peer)?.pipe
+        if (!pipe) return false
+        pipe.send(frame)
+        return true
+      },
       buffered: (peer) => peers.get(peer)?.pipe?.buffered() ?? 0,
       drop: (peer) => peers.get(peer)?.pc.close(),
       close: () => {

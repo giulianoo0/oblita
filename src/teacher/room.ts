@@ -6,6 +6,7 @@ import { decodeFrame, encodeBinary, encodeJson } from '../../shared/frames'
 import {
   ALERT_LABEL,
   ALERT_SEVERE,
+  HUB_PORT,
   REVEAL_COUNTDOWN_SECONDS,
   MAX_Y_UPDATE_BYTES,
   HOST_RUN_INTERVAL_MS,
@@ -34,6 +35,12 @@ import { addTime, expiredQuestions, isOpen, isVisible, release, visibleExam, wit
 import { ExamDoc } from '../collab/examDoc'
 import { connectHubBus, connectRtcBus, type Bus } from '../net/bus'
 import { compile, run } from '../compiler/client'
+import { RoomStore, type KV, type RoomState } from './roomStore'
+import { Recordings } from './recStore'
+import { DiskMirror } from './diskSink'
+import { FileLink, type DiskInfo } from './fileLink'
+import { roomFolder, roomLayout } from './layout'
+import { RecRate, spaceWarning } from './storageWatch'
 
 const SIGNAL_LOST_MS = 6000
 const ALERT_THUMBS_KEPT = 300
@@ -70,6 +77,30 @@ const MAX_BEACON_PIXELS = 4_000_000
 
 const ACTIVE_KEY = 'active-room'
 const MAX_STUDENTS = 512
+// Ritmo fixo, como o salvamento: texto regravado na pasta no máximo a cada 3 s.
+const DISK_EVERY_MS = 3000
+const SPACE_EVERY_MS = 30_000
+const DISK_RETRY_MS = 5000
+
+const idbKV: KV = {
+  get: (key) => idb.get('kv', key),
+  putMany: (entries) => idb.putMany('kv', entries),
+  entries: async (prefix) => (await idb.entries('kv', idb.prefix(prefix))).map(([k, v]) => [String(k), v]),
+}
+
+// Onde a sala está sendo guardada, para o painel mostrar. Nada daqui é segredo.
+export interface StorageState {
+  mode: 'disk' | 'browser'
+  // Pasta escolhida no programa e a subpasta desta prova.
+  root: string | null
+  folder: string | null
+  free: number | null
+  warning: string | null
+  error: string | null
+  saved: string | null
+  // Segmentos que ficaram no navegador porque o disco falhou.
+  browserSegments: number
+}
 
 export interface AlertEntry {
   id: string
@@ -121,6 +152,11 @@ export interface SegmentInfo {
   parts: number
   size: number
   complete: boolean
+  // Caminho do arquivo na pasta da prova e quantos bytes do começo do segmento já estão nele.
+  file?: string
+  disk?: number
+  // Primeiro pedaço que ficou no navegador porque o disco falhou; daí em diante, tudo lá até o flush.
+  browserFrom?: number
 }
 
 export interface Student {
@@ -147,6 +183,7 @@ export interface Student {
   segments: Record<number, SegmentInfo>
 }
 
+// Formato salvo de antes da divisão em chaves; listRooms e activeRoom só leem config e fase.
 interface Snapshot {
   config: RoomConfig
   exam: Exam
@@ -220,6 +257,33 @@ export class Room extends Observable {
   private lastTest = new Map<string, number>()
   private lastRun = new Map<string, number>()
   private lastThumb = new Map<string, Blob>()
+  private store!: RoomStore
+  private recs!: Recordings
+  disk: FileLink | null = null
+  private mirror: DiskMirror | null = null
+  private diskTimer = 0
+  private diskRunning: Promise<void> | null = null
+  private diskAgain = false
+  private hubToken = ''
+  private recRate = new RecRate()
+  // Conexões cujo pedaço de vídeo não foi gravado: o resto delas é ignorado até reconectar.
+  private recFailed = new Set<string>()
+  private disposed = false
+  storage: StorageState = { mode: 'browser', root: null, folder: null, free: null, warning: null, error: null, saved: null, browserSegments: 0 }
+  onStorage: ((text: string) => void) | null = null
+
+  private initStorage() {
+    this.store = new RoomStore(this.config.roomId, idbKV)
+    this.recs = new Recordings(this.config.roomId, {
+      disk: () => (this.disk?.open ? this.disk : null),
+      browser: {
+        put: (key, blob) => idb.put('chunks', key, blob).then(() => {}),
+        values: (prefix) => idb.values<Blob>('chunks', idb.prefix(prefix)),
+        remove: (prefix) => idb.del('chunks', idb.prefix(prefix)).then(() => {}),
+      },
+      pathFor: (clientId, seg) => this.mirror?.pathFor(clientId, seg) ?? null,
+    })
+  }
 
   static async create(config: RoomConfig, exam: Exam, solutions: Solutions | null, password = ''): Promise<Room> {
     const room = new Room()
@@ -235,19 +299,25 @@ export class Room extends Observable {
     room.fingerprint = await fingerprint(room.identity.publicRaw)
     // Só a chave derivada fica salva: a senha em si não existe em disco nem na rede.
     room.roomKey = (await deriveRoomKey(room.roomCode, password, salt)) as Uint8Array<ArrayBuffer>
+    room.initStorage()
     await requestPersistence()
     await room.save()
+    void room.checkSpace()
     await idb.put('kv', ACTIVE_KEY, config.roomId)
     const index = (await idb.get<string[]>('kv', 'rooms')) ?? []
     await idb.put('kv', 'rooms', [config.roomId, ...index.filter((r) => r !== config.roomId)])
     return room
   }
 
+  // Lê os dois formatos: o de chaves separadas e o antigo, numa chave só, que migra ao salvar.
   static async load(roomId: string): Promise<Room | null> {
-    const snap = await idb.get<Snapshot>('kv', `room:${roomId}`)
+    const store = new RoomStore(roomId, idbKV)
+    const snap = await store.load()
     if (!snap) return null
     const room = new Room()
     room.config = snap.config
+    room.initStorage()
+    room.store = store
     room.exam = snap.exam
     room.solutions = snap.solutions
     room.config.flow ??= 'free'
@@ -288,8 +358,8 @@ export class Room extends Observable {
     return this.endsAt ? this.endsAt - Date.now() : null
   }
 
-  private save() {
-    const snap: Snapshot = {
+  private state(): RoomState {
+    return {
       config: this.config,
       exam: this.exam,
       solutions: this.solutions,
@@ -304,13 +374,16 @@ export class Room extends Observable {
       clocks: this.clocks,
       createdAt: this.createdAt,
       students: [...this.students.values()],
-      teams: [...this.teams.values()].map((t) => {
-        const doc = this.docs.get(t.key)
-        return doc ? { ...t, doc: toB64Large(doc.encodeState()) } : t
-      }),
-      alerts: this.alerts.slice(0, 2000),
+      teams: [...this.teams.values()],
+      alerts: this.alerts,
     }
-    return idb.put('kv', `room:${this.config.roomId}`, snap)
+  }
+
+  // Só o que mudou desde o último salvamento: o estático uma vez, cada documento quando muda.
+  // Depois de dispose não grava nada: a instância nova, carregada do disco, é que manda.
+  private save(): Promise<void> {
+    if (this.disposed) return Promise.resolve()
+    return this.store.save(this.state(), this.docs)
   }
 
   private touch() {
@@ -321,6 +394,7 @@ export class Room extends Observable {
         void this.saveAndAck()
       }, SAVE_EVERY_MS)
     }
+    this.scheduleDisk()
     this.changed()
   }
 
@@ -328,7 +402,17 @@ export class Room extends Observable {
   private async saveAndAck() {
     const due = [...this.dueAcks].map((s) => ({ s, event: s.lastEvent, rec: s.lastRec }))
     this.dueAcks.clear()
-    await this.save().catch((err) => console.error('falha ao salvar a sala', err))
+    try {
+      await this.save()
+    } catch (err) {
+      // Sem salvar, não confirma: o aluno continua guardando, e a próxima volta tenta de novo.
+      console.error('falha ao salvar a sala', err)
+      for (const { s } of due) this.dueAcks.add(s)
+      this.setStorageError('O navegador não conseguiu salvar a sala. Libere espaço no disco; os alunos guardam até voltar.')
+      if (!this.disposed) this.touch()
+      return
+    }
+    if (this.storage.error?.startsWith('O navegador não conseguiu salvar')) this.setStorageError(null)
     for (const { s, event, rec } of due) {
       this.sendToStudent(s, { t: 'ack', stream: 'event', seq: event })
       this.sendToStudent(s, { t: 'ack', stream: 'rec', seq: rec })
@@ -348,6 +432,8 @@ export class Room extends Observable {
     try {
       this.attachBus(await connectHubBus(address, token))
       this.busState = 'hub'
+      this.hubToken = token
+      void this.connectDisk(token)
     } catch (err) {
       this.busState = 'down'
       throw err
@@ -374,6 +460,8 @@ export class Room extends Observable {
   private attachBus(bus: Bus) {
     this.bus?.close()
     this.bus = bus
+    // Outro programa, ou o mesmo reaberto: os números de conexão recomeçam.
+    this.recFailed.clear()
     bus.onopen = (peer) => void this.startHandshake(peer)
     bus.onframe = (peer, frame) => this.onFrame(peer, frame)
     bus.onpeerclose = (peer) => this.onPeerClose(peer)
@@ -398,21 +486,30 @@ export class Room extends Observable {
       window.setInterval(() => this.checkSignals(), 1000),
       window.setInterval(() => this.checkClock(), 1000),
       window.setInterval(() => this.tickBeacons(), BEACON_INTERVAL_MS),
+      window.setInterval(() => void this.checkSpace(), SPACE_EVERY_MS),
     )
+    void this.checkSpace()
   }
 
-  dispose() {
+  // O último salvamento termina antes de soltar a trava: a aba que pegar a sala depois lê o que está
+  // em disco, e nada desta instância chega depois para escrever por cima.
+  async dispose() {
     this.timers.forEach(clearInterval)
     this.timers = []
-    // Um salvamento atrasado desta instância escreveria por cima da que vier depois.
     clearTimeout(this.saveTimer)
     this.saveTimer = 0
+    clearTimeout(this.diskTimer)
+    this.diskTimer = 0
     this.bus?.close()
     this.bus = null
-    this.tabLockRelease?.()
+    this.disk?.close()
+    this.disk = null
+    const held = this.tabLockRelease
+    if (held) await this.save().catch(() => {})
+    this.disposed = true
     this.tabLockRelease = null
     this.tabHold = null
-    void this.save()
+    held?.()
   }
 
   // Duas abas na mesma sala brigariam pelos alunos e pelo gabarito: só uma fica com ela.
@@ -979,6 +1076,8 @@ export class Room extends Observable {
   }
 
   private async storeRec(peer: string, s: Student, msg: Extract<StudentMsg, { t: 'rec' }>, bytes: Uint8Array<ArrayBuffer>) {
+    // Um pedaço desta conexão não foi gravado: os seguintes esperam o aluno reconectar e reenviar em ordem.
+    if (this.recFailed.has(peer)) return
     // `segment` vira chave de objeto e nome de arquivo: "__proto__" ou "../x" não podem chegar lá.
     if (!isIndex(msg.segment) || !isIndex(msg.part) || !Number.isSafeInteger(msg.seq)) return this.bus?.drop(peer)
     if (typeof msg.mime !== 'string' || !/^video\/[a-z0-9.+;=, -]{1,80}$/i.test(msg.mime)) return this.bus?.drop(peer)
@@ -997,17 +1096,190 @@ export class Room extends Observable {
       size: 0,
       complete: false,
     })
-    await idb.put('chunks', partKey(this.config.roomId, s.clientId, msg.segment, msg.part), new Blob([bytes], { type: msg.mime }))
+    try {
+      await this.recs.store(s.clientId, seg, msg.part, bytes)
+    } catch (err) {
+      // Nem disco nem navegador: não confirma. O número não avança, e a conexão cai para o aluno
+      // reenviar a partir daqui; os pedaços seguintes desta conexão são ignorados até lá.
+      console.error('falha ao gravar pedaço', err)
+      this.recFailed.add(peer)
+      this.bus?.drop(peer)
+      this.setStorageError(`Não foi possível guardar a gravação de ${s.name}: disco e navegador sem espaço. O aluno guarda até voltar.`)
+      this.changed()
+      return
+    }
     s.lastRec = msg.seq
     seg.parts = Math.max(seg.parts, msg.part + 1)
     seg.size += bytes.length
     if (msg.last) seg.complete = true
+    this.recRate.add(bytes.length)
+    if (seg.browserFrom !== undefined) {
+      if (seg.complete) void this.recs.flush(s.clientId, seg).then(() => this.countBrowserSegments())
+      this.countBrowserSegments()
+    }
     this.ackWhenSaved(s)
   }
 
   async segmentBlob(clientId: string, segment: SegmentInfo): Promise<Blob> {
-    const parts = await idb.values<Blob>('chunks', idb.prefix(`${this.config.roomId}/${clientId}/${pad(segment.segment)}/`))
-    return new Blob(parts, { type: segment.mime })
+    return this.recs.blob(clientId, segment)
+  }
+
+  // ---- pasta da prova, pelo programa
+
+  get diskFolder() {
+    return roomFolder(this.config.title, this.createdAt)
+  }
+
+  private async connectDisk(token: string) {
+    this.disk?.close()
+    this.disk = null
+    let link: FileLink
+    try {
+      link = await FileLink.connect(token, { url: `ws://localhost:${HUB_PORT}/ws/files` })
+    } catch {
+      // Programa antigo, sem a rota de arquivos: tudo segue no navegador, como antes.
+      this.storage = { ...this.storage, mode: 'browser' }
+      return this.changed()
+    }
+    if (this.disposed || this.hubToken !== token) return link.close()
+    this.disk = link
+    link.oninfo = (info) => this.onDiskInfo(info)
+    link.onclose = () => {
+      if (this.disk !== link) return
+      this.disk = null
+      this.storage = { ...this.storage, mode: 'browser' }
+      this.setStorageError('O programa parou de gravar na pasta. A gravação segue guardada no navegador.')
+      // A rota de arquivos caiu sozinha: tenta de novo com o mesmo token enquanto o painel estiver no programa.
+      window.setTimeout(() => {
+        if (!this.disposed && !this.disk && this.busState === 'hub' && this.hubToken === token) void this.connectDisk(token)
+      }, DISK_RETRY_MS)
+    }
+    this.mirror ??= new DiskMirror(this.diskFolder, () => roomLayout(this), {
+      load: async () => (await idb.get<string[]>('kv', `room:${this.config.roomId}:disk`)) ?? [],
+      save: (paths) => idb.put('kv', `room:${this.config.roomId}:disk`, paths).then(() => {}),
+    })
+    this.storage = { ...this.storage, mode: 'disk', folder: this.diskFolder }
+    this.setStorageError(null)
+    this.scheduleDisk(0)
+    void this.checkSpace()
+  }
+
+  private onDiskInfo(info: DiskInfo) {
+    if (this.storage.root && info.root !== this.storage.root) {
+      // O professor trocou a pasta no programa: o texto é regravado inteiro na nova.
+      this.mirror?.reset()
+      this.storage.saved = null
+    }
+    this.storage = { ...this.storage, root: info.root, free: info.free }
+    this.updateWarning()
+    this.scheduleDisk(0)
+  }
+
+  private scheduleDisk(delay = DISK_EVERY_MS) {
+    if (!this.disk?.open || !this.mirror || this.disposed) return
+    if (this.diskTimer) {
+      if (delay > 0) return
+      clearTimeout(this.diskTimer)
+    }
+    this.diskTimer = window.setTimeout(() => {
+      this.diskTimer = 0
+      void this.syncDisk()
+    }, delay)
+  }
+
+  private async syncDisk() {
+    if (this.diskRunning) {
+      this.diskAgain = true
+      return this.diskRunning
+    }
+    this.diskRunning = this.runDiskSync().finally(() => {
+      this.diskRunning = null
+      if (this.diskAgain) {
+        this.diskAgain = false
+        this.scheduleDisk()
+      }
+    })
+    return this.diskRunning
+  }
+
+  private async runDiskSync() {
+    const link = this.disk
+    const mirror = this.mirror
+    if (!link?.open || !mirror) return
+    // O que caiu no navegador volta para a pasta quando o segmento fecha e o disco responde.
+    for (const s of this.students.values()) {
+      for (const seg of Object.values(s.segments)) {
+        if (seg.browserFrom !== undefined && (seg.complete || this.phase === 'ended')) await this.recs.flush(s.clientId, seg)
+      }
+    }
+    this.countBrowserSegments()
+    let failed: string[]
+    try {
+      ;({ failed } = await mirror.sync(link))
+    } catch {
+      failed = ['?']
+    }
+    if (failed.length) this.setStorageError(`Não foi possível atualizar ${failed.length} arquivo(s) na pasta da prova. Se algum estiver aberto no Excel, feche; o painel tenta de novo.`)
+    else if (this.storage.error?.startsWith('Não foi possível atualizar')) this.setStorageError(null)
+    if (this.phase === 'ended') await this.markSaved(failed.length === 0)
+    this.changed()
+  }
+
+  // "Tudo salvo" só quando a prova acabou, a correção terminou e nada ficou de fora da pasta.
+  private async markSaved(textOk: boolean) {
+    const grading = [...this.teams.values()].some((t) => Object.values(t.grades).some((g) => g.status === 'pending' || g.status === 'running'))
+    await Promise.all(this.recChains.values())
+    const ok = textOk && !grading && this.storage.browserSegments === 0 && !!this.disk?.open
+    if (!ok) {
+      this.storage.saved = null
+      if (grading) this.scheduleDisk()
+      return
+    }
+    try {
+      this.storage.saved = await this.disk!.done(this.diskFolder)
+    } catch {
+      this.storage.saved = null
+    }
+  }
+
+  private countBrowserSegments() {
+    let n = 0
+    for (const s of this.students.values()) for (const seg of Object.values(s.segments)) if (seg.browserFrom !== undefined) n++
+    if (n !== this.storage.browserSegments) {
+      this.storage.browserSegments = n
+      this.changed()
+    }
+  }
+
+  private setStorageError(error: string | null) {
+    if (this.storage.error === error) return
+    this.storage = { ...this.storage, error }
+    if (error) this.onStorage?.(error)
+    this.changed()
+  }
+
+  // Espaço livre na pasta do programa ou na cota do navegador, e quanto tempo dura no ritmo atual.
+  async checkSpace() {
+    let free: number | null = null
+    try {
+      if (this.disk?.open) free = (await this.disk.info()).free
+      else {
+        const est = await navigator.storage?.estimate?.()
+        if (est?.quota !== undefined) free = est.quota - (est.usage ?? 0)
+      }
+    } catch {
+      return
+    }
+    this.storage = { ...this.storage, free }
+    this.updateWarning()
+  }
+
+  private updateWarning() {
+    const warning = spaceWarning(this.storage.free, this.recRate.perSecond())
+    if (warning === this.storage.warning) return
+    this.storage = { ...this.storage, warning }
+    if (warning) this.onStorage?.(warning)
+    this.changed()
   }
 
   // ---- grupo
@@ -1304,6 +1576,8 @@ export class Room extends Observable {
     for (const team of this.teams.values()) this.closeTeam(team)
     void idb.del('kv', ACTIVE_KEY)
     void this.save()
+    // A pasta recebe a versão final logo, sem esperar o ritmo; "Tudo salvo" sai quando a correção acabar.
+    this.scheduleDisk(0)
     this.changed()
   }
 
@@ -1555,9 +1829,7 @@ export class Room extends Observable {
   }
 }
 
-const pad = (n: number) => String(n).padStart(6, '0')
 const isIndex = (n: unknown) => Number.isSafeInteger(n) && (n as number) >= 0
-const partKey = (room: string, client: string, segment: number, part: number) => `${room}/${client}/${pad(segment)}/${pad(part)}`
 // Fórmula em CSV roda ao abrir no Excel; o nome vem do aluno, então é neutralizado.
 const csvCell = (v: unknown) => {
   const text = String(v).replace(/"/g, '""')
@@ -1604,13 +1876,6 @@ export async function activeRoom() {
   if (snap && snap.phase !== 'ended') return { id, title: snap.config.title, phase: snap.phase }
   await idb.del('kv', ACTIVE_KEY)
   return null
-}
-
-// btoa com spread estoura a pilha em documentos grandes.
-function toB64Large(bytes: Uint8Array) {
-  let text = ''
-  for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
-  return btoa(text)
 }
 
 const fromB64Large = (text: string) => fromB64(text)

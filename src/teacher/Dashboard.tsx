@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'motion/react'
-import { AlertTriangle, Check, ChevronDown, Download, EyeOff, Loader2, Lock, PenLine, Users, WifiOff } from 'lucide-react'
+import { AlertTriangle, Check, ChevronDown, Download, EyeOff, HardDrive, Loader2, Lock, PenLine, Users, WifiOff } from 'lucide-react'
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode, type Ref } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -9,6 +9,8 @@ import { detectHub } from '../net/bus'
 import { Avatar, Logo, Modal, Pill, Popover, PopoverRow, Segmented, Switch, useTick } from '../ui/kit'
 import { alertLabel, canStreamToDisk, download, exportRoomZip, safeName } from './exportZip'
 import { openRoom, type AlertEntry, type Grade, type Room, type Student, type Team } from './room'
+import { keepConnected } from './reconnect'
+import { formatBytes } from './storageWatch'
 import './dash.css'
 
 const HOST_URL = import.meta.env.VITE_HOST_URL ?? 'https://github.com/giulianoo0/oblita/releases/latest/download/oblita-host.exe'
@@ -122,6 +124,19 @@ function beep() {
   osc.stop(t + 0.2)
 }
 
+// Quem escolheu "Só navegador" no cartão de conexão não é puxado de volta para o programa.
+const prefersBrowser = new WeakSet<Room>()
+
+const loopbackGranted = async () => {
+  try {
+    const perm = await navigator.permissions.query({ name: 'loopback-network' as PermissionName })
+    return perm.state === 'granted'
+  } catch {
+    // Navegador sem essa permissão: fica no botão.
+    return false
+  }
+}
+
 async function connectProgram(room: Room) {
   const hub = await detectHub()
   if (!hub) return false
@@ -152,6 +167,14 @@ export function useRoomRuntime(room: Room, onAlarm?: (clientId: string) => void)
     }
   }, [room])
 
+  useEffect(() => {
+    const handler = (text: string) => toast.error(text, { duration: 10_000 })
+    room.onStorage = handler
+    return () => {
+      if (room.onStorage === handler) room.onStorage = null
+    }
+  }, [room])
+
   const running = room.phase === 'running'
   useEffect(() => {
     if (!running) return
@@ -160,20 +183,16 @@ export function useRoomRuntime(room: Room, onAlarm?: (clientId: string) => void)
     return () => window.removeEventListener('beforeunload', guard)
   }, [running])
 
-  // Com a permissão já dada não há prompt, então dá para reconectar sem pedir clique.
-  const tried = useRef(false)
-  useEffect(() => {
-    if (tried.current || room.busState !== 'none') return
-    tried.current = true
-    void (async () => {
-      try {
-        const perm = await navigator.permissions.query({ name: 'loopback-network' as PermissionName })
-        if (perm.state === 'granted' && room.busState === 'none') await connectProgram(room)
-      } catch {
-        // Navegador sem essa permissão, ou programa fechado: fica no botão.
-      }
-    })()
-  }, [room])
+  // Com a permissão já dada não há prompt, então dá para reconectar sem pedir clique: ao abrir,
+  // quando o programa cai e volta, e quando o professor abre o programa depois do painel.
+  useEffect(
+    () =>
+      keepConnected({
+        wanted: async () => (room.busState === 'none' || room.busState === 'down') && !prefersBrowser.has(room) && (await loopbackGranted()),
+        connect: () => connectProgram(room),
+      }),
+    [room],
+  )
 }
 
 export default function Dashboard() {
@@ -266,6 +285,7 @@ function DashboardView({ room }: { room: Room }) {
         <main className="dash-main">{view === 'wall' ? <Wall room={room} alarms={alarms} /> : <ResultsTable room={room} />}</main>
         <aside className="dash-side">
           <ConnectionCard room={room} />
+          <StorageCard room={room} />
           {room.flow === 'manual' && room.phase !== 'ended' && <ManualPanel room={room} />}
           <div className="card alert-card">
             <div className="row">
@@ -377,27 +397,22 @@ function TeacherCode({ room }: { room: Room }) {
 }
 
 function ConnectionCard({ room }: { room: Room }) {
-  const [mode, setMode] = useState<'hub' | 'rtc'>(room.bus?.kind ?? 'hub')
+  const [mode, setModeState] = useState<'hub' | 'rtc'>(room.bus?.kind ?? (prefersBrowser.has(room) ? 'rtc' : 'hub'))
+  const setMode = (next: 'hub' | 'rtc') => {
+    if (next === 'rtc') prefersBrowser.add(room)
+    else prefersBrowser.delete(room)
+    setModeState(next)
+  }
   const [busy, setBusy] = useState(false)
   const [missing, setMissing] = useState(false)
   const [failed, setFailed] = useState(false)
   const state = room.busState
   const connecting = busy || state === 'connecting'
 
-  // Com a permissão já dada, abrir o programa basta: o painel conecta sozinho e o IP aparece.
+  // A reconexão sozinha mora em useRoomRuntime; aqui só some o aviso quando ela consegue.
   useEffect(() => {
-    if (mode !== 'hub' || state === 'hub' || state === 'rtc') return
-    const timer = setInterval(() => {
-      void navigator.permissions
-        .query({ name: 'loopback-network' as PermissionName })
-        .then(async (perm) => {
-          if (perm.state !== 'granted' || room.busState === 'hub' || room.busState === 'connecting') return
-          if (await connectProgram(room)) setMissing(false)
-        })
-        .catch(() => {})
-    }, 3000)
-    return () => clearInterval(timer)
-  }, [mode, state, room])
+    if (state === 'hub') setMissing(false)
+  }, [state])
 
   const connect = async () => {
     setBusy(true)
@@ -496,6 +511,40 @@ function ConnectionCard({ room }: { room: Room }) {
           </a>
         )}
       </div>
+    </div>
+  )
+}
+
+// ---- onde a prova está sendo guardada
+
+function StorageCard({ room }: { room: Room }) {
+  const st = room.storage
+  const onDisk = st.mode === 'disk'
+  const where = onDisk && st.root ? `${st.root}${st.root.includes('\\') ? '\\' : '/'}${st.folder ?? ''}` : null
+  return (
+    <div className="card conn">
+      <div className="row">
+        <i className={`dot${st.error ? '' : ' on'}`} />
+        <h2 className="grow">Gravação</h2>
+        <HardDrive size={16} />
+      </div>
+      {where ? (
+        <div className="stack" style={{ gap: 0 }}>
+          <span className="conn-label">Pasta da prova, pelo programa</span>
+          <span className="small mono" style={{ wordBreak: 'break-all' }}>{where}</span>
+        </div>
+      ) : (
+        <span className="small muted">Neste navegador. No fim, use Exportar para baixar o zip.</span>
+      )}
+      {st.free !== null && <span className="small muted">{formatBytes(st.free)} livres</span>}
+      {st.warning && <div className="errbox">{st.warning}</div>}
+      {st.error && <div className="errbox">{st.error}</div>}
+      {st.browserSegments > 0 && onDisk && <span className="small warn">{st.browserSegments} trecho(s) de gravação no navegador, esperando o disco voltar.</span>}
+      {st.saved && (
+        <span className="small" style={{ color: 'var(--status-success)' }}>
+          <Check size={14} /> Tudo salvo em {st.saved}
+        </span>
+      )}
     </div>
   )
 }
@@ -855,6 +904,7 @@ function ExportModal({ room, open, onClose }: { room: Room; open: boolean; onClo
         <Switch label="Incluir gravações" checked={video && streamable} onChange={setVideo} />
       </div>
       {!streamable && <span className="small warn">Este navegador não grava direto em disco, então o zip vai sem vídeo.</span>}
+      {room.storage.mode === 'disk' && <span className="small muted">Com o programa, a pasta da prova já tem tudo, inclusive as gravações. O zip leva só o que ficou no navegador.</span>}
       {progress && (
         <div className="dash-progress" role="progressbar" aria-valuemin={0} aria-valuemax={progress.total} aria-valuenow={progress.done}>
           <i style={{ width: `${Math.min(100, (progress.done / Math.max(1, progress.total)) * 100)}%` }} />
