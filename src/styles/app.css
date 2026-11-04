@@ -287,6 +287,21 @@ textarea.input { height: auto; min-height: 5.5rem; padding: 0.625rem 0.875rem; r
 .form-section { gap: 1.125rem; }
 .form-section > h2, .form-section .row > h2 { font-size: var(--text-lg); font-weight: 600; letter-spacing: -0.01em; }
 .form-section > .switch + .switch { border-top: 1px solid var(--line); }
+/* Seção que recolhe: a altura desliza de 1fr a 0fr, e a margem negativa deixa o anel de foco dos campos à vista. */
+.fold { display: flex; flex-direction: column; gap: 0; }
+.fold-head { gap: 0.75rem; }
+.fold-toggle { display: inline-flex; align-items: center; gap: 0.375rem; padding: 0; border: 0; background: none; color: inherit; font: inherit; letter-spacing: inherit; cursor: pointer; text-align: start; }
+.fold-chevron { flex: none; color: var(--text-faint); transition: rotate var(--dur-base) var(--ease-out); }
+.fold:not([data-open]) .fold-chevron { rotate: -90deg; }
+.fold-body { display: grid; grid-template-rows: 1fr; transition: grid-template-rows var(--dur-base) var(--ease-out); }
+.fold:not([data-open]) .fold-body { grid-template-rows: 0fr; }
+/* O espaçamento fica dentro do que recolhe: recolhida, a seção é só o título. */
+.fold-inner { min-height: 0; overflow: hidden; margin: 0 -0.25rem; }
+.fold-content { display: flex; flex-direction: column; gap: 1.125rem; padding: 1.125rem 0.25rem 0.25rem; }
+.fold-content.list { gap: 0; padding-top: 0.5rem; }
+.fold-content.list > .switch + .switch { border-top: 1px solid var(--line); }
+.fold[data-open] { padding-bottom: 1rem; }
+@media (hover: hover) and (pointer: fine) { .fold-toggle:hover .fold-chevron { color: var(--text-muted); } }
 .form-row { display: grid; grid-template-columns: minmax(7rem, 9rem) 1fr; gap: 0.875rem; align-items: start; }
 .form-row > :only-child { grid-column: 1 / -1; }
 @media (max-width: 34rem) { .form-row { grid-template-columns: 1fr; } }
