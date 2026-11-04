@@ -174,8 +174,26 @@ export const MAX_CODE_BYTES = 256 * 1024
 export const MAX_FILES = 20
 export const RUN_LIMITS = { memoryMb: 256, timeMs: 5_000, outputKb: 1024 } as const
 
-// Só nomes simples: nada de pasta, para o nome nunca escapar do diretório ao exportar.
+// Caminho relativo com "/", validado nome a nome, para nunca escapar do diretório ao compilar
+// nem ao exportar: sem "..", ".", nome vazio, barra invertida, letra de unidade nem nome reservado do Windows.
 export const FILE_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,48}\.(c|cc|cpp|h|hpp)$/
+const FOLDER_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,48}$/
+const RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\.|$)/i
+export const MAX_PATH_DEPTH = 4
+export const MAX_PATH_CHARS = 120
+
+const folderName = (name: string) => FOLDER_NAME.test(name) && !name.endsWith('.') && !RESERVED.test(name)
+
+export function validFolder(path: string) {
+  const parts = path.split('/')
+  return path.length <= MAX_PATH_CHARS && parts.length < MAX_PATH_DEPTH && parts.every(folderName)
+}
+
+export function validPath(path: string) {
+  const parts = path.split('/')
+  const name = parts.pop()!
+  return path.length <= MAX_PATH_CHARS && parts.length < MAX_PATH_DEPTH && parts.every(folderName) && FILE_NAME.test(name) && !RESERVED.test(name)
+}
 
 export function validFiles(files: unknown): files is Record<string, string> {
   if (typeof files !== 'object' || !files) return false
@@ -183,8 +201,13 @@ export function validFiles(files: unknown): files is Record<string, string> {
   if (!entries.length || entries.length > MAX_FILES) return false
   let total = 0
   for (const [name, content] of entries) {
-    if (!FILE_NAME.test(name) || typeof content !== 'string') return false
+    if (!validPath(name) || typeof content !== 'string') return false
     total += content.length
+  }
+  // "a.c" e "a.c/x.h" exigiriam um nome que é arquivo e pasta ao mesmo tempo.
+  const names = new Set(entries.map(([name]) => name))
+  for (const name of names) {
+    for (let i = name.indexOf('/'); i > 0; i = name.indexOf('/', i + 1)) if (names.has(name.slice(0, i))) return false
   }
   return total <= MAX_CODE_BYTES
 }
