@@ -140,7 +140,8 @@ export class FrameGrabber {
     void this.video.play().catch(() => {})
   }
 
-  // WebP sai menor que JPEG para tela; quem não gera WebP devolve PNG, e aí vai JPEG.
+  // Medido numa tela de editor (tests/bandwidth): WebP com 0,15 a menos de qualidade sai ~13% menor
+  // que o JPEG equivalente. Quem não gera WebP devolve PNG, e aí vai JPEG.
   private webp = true
 
   async grab(width: number, quality: number): Promise<Blob | null> {
@@ -150,7 +151,7 @@ export class FrameGrabber {
     this.canvas.height = Math.round((h / w) * width)
     this.canvas.getContext('2d')?.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height)
     if (this.webp) {
-      const blob = await new Promise<Blob | null>((resolve) => this.canvas.toBlob(resolve, 'image/webp', quality))
+      const blob = await new Promise<Blob | null>((resolve) => this.canvas.toBlob(resolve, 'image/webp', Math.max(0.2, quality - 0.15)))
       if (blob?.type === 'image/webp') return blob
       this.webp = false
     }
