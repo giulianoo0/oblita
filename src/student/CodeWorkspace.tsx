@@ -1,13 +1,15 @@
 import { CircleCheck, CircleX, FlaskConical, Info, LoaderCircle, Pencil, Play, Plus, Square, Trash2 } from 'lucide-react'
-import { useEffect, useReducer, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { useEffect, useReducer, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import type { Awareness } from 'y-protocols/awareness'
 import type { CodeQuestion, Lang } from '../../shared/exam'
 import { FILE_NAME, MAX_CODE_BYTES, MAX_FILES, RUN_LIMITS } from '../../shared/protocol'
 import { useObservable } from '../lib/store'
 import { Modal, Pill, Segmented, useTick } from '../ui/kit'
+import { BlockLayout, type BlockLayoutApi } from './BlockLayout'
 import { CollabEditor, peersOf, type Peer } from './collabEditor'
 import { registerCompletions } from './completions'
 import './exam.css'
+import { BLOCK_LIMITS, BLOCK_TITLES } from './examLayout'
 import { EDITOR_FONT, monaco, remeasureWhenFontLoads, showDiagnostics } from './monaco'
 import { internalClipboard } from './proctor'
 import { defaultStarter, mainFile, studentSession } from './session'
@@ -148,7 +150,8 @@ function Presence({ peers, questions }: { peers: Peer[]; questions: string[] }) 
   )
 }
 
-export function CodeWorkspace({ question }: { question: CodeQuestion }) {
+// O enunciado vem pronto de fora; aqui ele vira um dos blocos, junto do editor, da entrada e da saída.
+export function CodeWorkspace({ question, statement, layout }: { question: CodeQuestion; statement: ReactNode; layout: BlockLayoutApi }) {
   const s = useObservable(studentSession)
   const peers = usePeers(s.awareness)
   const answer = s.answerOf(question.id)
@@ -315,65 +318,89 @@ export function CodeWorkspace({ question }: { question: CodeQuestion }) {
   const lastSource = (file: string) => isSource(file, lang) && names.filter((n) => isSource(n, lang)).length === 1
   const totalSize = Object.values(files).reduce((sum, text) => sum + text.length, 0)
 
+  const onTest = () => {
+    lastJob.test = question.id
+    setView('tests')
+    void s.runTest(question.id)
+  }
+
   return (
-    <div className="workspace">
-      <div className="ide">
-        <div className="files" role="listbox" aria-label="Arquivos" inert={!open}>
-          <div className="files-head">
-            <span>Arquivos</span>
-            <button type="button" className="ghost" aria-label="Novo arquivo" title="Novo arquivo" disabled={names.length >= MAX_FILES} onClick={() => setRenaming({ from: null, value: '' })}>
-              <Plus size={14} />
-            </button>
-          </div>
-          {names.map((file) =>
-            renaming?.from === file ? (
-              <input key={file} className="file-new" autoFocus spellCheck={false} aria-label={`Novo nome de ${file}`} value={renaming.value} onChange={(e) => setRenaming({ ...renaming, value: e.target.value, error: undefined })} onKeyDown={onNameKey} onBlur={commitName} />
-            ) : (
-              <div key={file} className="file" role="option" tabIndex={0} aria-selected={file === active} title={file} onClick={() => selectFile(file)} onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && selectFile(file)} onDoubleClick={() => setRenaming({ from: file, value: file })}>
-                <span>{file}</span>
-                <PeerDots peers={peers.filter((p) => p.q === question.id && p.file === file)} />
-                <button type="button" className="x" aria-label={`Renomear ${file}`} title="Renomear" onClick={(e) => { e.stopPropagation(); setRenaming({ from: file, value: file }) }}>
-                  <Pencil size={12} />
-                </button>
-                <button type="button" className="x" aria-label={`Apagar ${file}`} title="Apagar" disabled={lastSource(file)} onClick={(e) => { e.stopPropagation(); setDeleting(file) }}>
-                  <Trash2 size={12} />
-                </button>
+    <>
+      <BlockLayout
+        api={layout}
+        limits={BLOCK_LIMITS}
+        blocks={[
+          { id: 'statement', title: BLOCK_TITLES.statement, body: statement },
+          {
+            id: 'editor',
+            title: BLOCK_TITLES.editor,
+            className: 'blk-ide',
+            extra: (
+              <div className="editor-tabs">
+                <span className="editor-name grow">{active}</span>
+                <Presence peers={peers} questions={s.saved?.exam?.questions.map((q) => q.id) ?? []} />
+                {totalSize > MAX_CODE_BYTES && <span className="badge danger">Código grande demais</span>}
+                <span ref={posRef} className="editor-pos">Ln 1, Col 1</span>
+                {question.languages.length > 1 ? (
+                  <Segmented<Lang> value={lang} onChange={switchLanguage} options={question.languages.map((l) => ({ value: l, label: LANG_LABEL[l] }))} />
+                ) : (
+                  <span className="badge">{LANG_LABEL[lang]}</span>
+                )}
               </div>
             ),
-          )}
-          {renaming?.from === null && <input className="file-new" autoFocus spellCheck={false} aria-label="Nome do novo arquivo" placeholder={lang === 'c' ? 'util.c' : 'util.cpp'} value={renaming.value} onChange={(e) => setRenaming({ ...renaming, value: e.target.value, error: undefined })} onKeyDown={onNameKey} onBlur={commitName} />}
-          {renaming?.error && <div className="files-error" role="alert">{renaming.error}</div>}
-        </div>
-        <div className="editor-host">
-          <div className="editor-tabs">
-            <span className="editor-name grow">{active}</span>
-            <Presence peers={peers} questions={s.saved?.exam?.questions.map((q) => q.id) ?? []} />
-            {totalSize > MAX_CODE_BYTES && <span className="badge danger">Código grande demais</span>}
-            <span ref={posRef} className="editor-pos">Ln 1, Col 1</span>
-            {question.languages.length > 1 ? (
-              <Segmented<Lang> value={lang} onChange={switchLanguage} options={question.languages.map((l) => ({ value: l, label: LANG_LABEL[l] }))} />
-            ) : (
-              <span className="badge">{LANG_LABEL[lang]}</span>
-            )}
-          </div>
-          <div ref={mount} className="editor-mount" />
-        </div>
-      </div>
-      <Console
-        question={question}
-        stdin={stdin}
-        onStdin={(value) => {
-          remembered.stdin.set(question.id, value)
-          bump()
-        }}
-        view={view}
-        onView={setView}
-        onRun={runNow}
-        onTest={() => {
-          lastJob.test = question.id
-          setView('tests')
-          void s.runTest(question.id)
-        }}
+            body: (
+              <div className="ide">
+                <div className="files" role="listbox" aria-label="Arquivos" inert={!open}>
+                  <div className="files-head">
+                    <span>Arquivos</span>
+                    <button type="button" className="ghost" aria-label="Novo arquivo" title="Novo arquivo" disabled={names.length >= MAX_FILES} onClick={() => setRenaming({ from: null, value: '' })}>
+                      <Plus size={14} />
+                    </button>
+                  </div>
+                  {names.map((file) =>
+                    renaming?.from === file ? (
+                      <input key={file} className="file-new" autoFocus spellCheck={false} aria-label={`Novo nome de ${file}`} value={renaming.value} onChange={(e) => setRenaming({ ...renaming, value: e.target.value, error: undefined })} onKeyDown={onNameKey} onBlur={commitName} />
+                    ) : (
+                      <div key={file} className="file" role="option" tabIndex={0} aria-selected={file === active} title={file} onClick={() => selectFile(file)} onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && selectFile(file)} onDoubleClick={() => setRenaming({ from: file, value: file })}>
+                        <span>{file}</span>
+                        <PeerDots peers={peers.filter((p) => p.q === question.id && p.file === file)} />
+                        <button type="button" className="x" aria-label={`Renomear ${file}`} title="Renomear" onClick={(e) => { e.stopPropagation(); setRenaming({ from: file, value: file }) }}>
+                          <Pencil size={12} />
+                        </button>
+                        <button type="button" className="x" aria-label={`Apagar ${file}`} title="Apagar" disabled={lastSource(file)} onClick={(e) => { e.stopPropagation(); setDeleting(file) }}>
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    ),
+                  )}
+                  {renaming?.from === null && <input className="file-new" autoFocus spellCheck={false} aria-label="Nome do novo arquivo" placeholder={lang === 'c' ? 'util.c' : 'util.cpp'} value={renaming.value} onChange={(e) => setRenaming({ ...renaming, value: e.target.value, error: undefined })} onKeyDown={onNameKey} onBlur={commitName} />}
+                  {renaming?.error && <div className="files-error" role="alert">{renaming.error}</div>}
+                </div>
+                <div className="editor-host">
+                  <div ref={mount} className="editor-mount" />
+                </div>
+              </div>
+            ),
+          },
+          {
+            id: 'input',
+            title: BLOCK_TITLES.input,
+            extra: <RunButtons closed={!open} onRun={runNow} onTest={onTest} />,
+            body: (
+              <textarea
+                className="console-in"
+                spellCheck={false}
+                aria-label="Entrada do programa"
+                value={stdin}
+                onChange={(e) => {
+                  remembered.stdin.set(question.id, e.target.value)
+                  bump()
+                }}
+              />
+            ),
+          },
+          { id: 'output', title: BLOCK_TITLES.output, extra: <OutputTabs view={view} onView={setView} />, body: <OutputBody question={question} view={view} /> },
+        ]}
       />
       <Modal open={deleting !== null} title={`Apagar ${deleting ?? ''}?`} onClose={() => setDeleting(null)}>
         <div className="row" style={{ justifyContent: 'flex-end' }}>
@@ -383,27 +410,60 @@ export function CodeWorkspace({ question }: { question: CodeQuestion }) {
           </Pill>
         </div>
       </Modal>
-    </div>
+    </>
   )
 }
 
-type ConsoleProps = {
-  question: CodeQuestion
-  stdin: string
-  onStdin: (value: string) => void
-  view: 'output' | 'tests'
-  onView: (view: 'output' | 'tests') => void
-  onRun: () => void
-  onTest: () => void
-}
+// Rodar é sempre possível; só o teste contra o professor depende da sala.
+const testsOn = () => studentSession.config?.compiler === true
 
-function Console({ question, stdin, onStdin, view, onView, onRun, onTest }: ConsoleProps) {
+function RunButtons({ closed, onRun, onTest }: { closed: boolean; onRun: () => void; onTest: () => void }) {
   const s = studentSession
-  // Rodar é sempre possível; só o teste contra o professor depende da sala.
-  const testsOn = s.config?.compiler === true
-  const shown = testsOn ? view : 'output'
   const out = s.runOutput
   const canStop = s.running && out?.state === 'running' && out.where === 'local'
+  return (
+    <>
+      {canStop ? (
+        <Pill size="sm" onClick={() => s.stopRun()}>
+          <Square size={14} /> Parar
+        </Pill>
+      ) : (
+        <Pill size="sm" tone="primary" disabled={s.running} title="Rodar (Ctrl+Enter)" onClick={onRun}>
+          {s.running ? <LoaderCircle size={14} className="spin" /> : <Play size={14} />} Rodar
+        </Pill>
+      )}
+      {testsOn() && <TestButton closed={closed} onTest={onTest} />}
+    </>
+  )
+}
+
+function OutputTabs({ view, onView }: { view: 'output' | 'tests'; onView: (view: 'output' | 'tests') => void }) {
+  const out = studentSession.runOutput
+  const shown = testsOn() ? view : 'output'
+  return (
+    <>
+      {testsOn() && (
+        <Segmented
+          value={view}
+          onChange={onView}
+          options={[
+            { value: 'output', label: 'Terminal' },
+            { value: 'tests', label: 'Testes' },
+          ]}
+        />
+      )}
+      {shown === 'output' && out?.where === 'host' && <span className="badge">Máquina do professor</span>}
+      <span className="grow" />
+      <span className="console-info" title={`Limites: ${RUN_LIMITS.memoryMb} MB de memória, ${RUN_LIMITS.timeMs / 1000} s e ${RUN_LIMITS.outputKb} KB de saída`} aria-label="Limites de execução">
+        <Info size={14} />
+      </span>
+    </>
+  )
+}
+
+function OutputBody({ question, view }: { question: CodeQuestion; view: 'output' | 'tests' }) {
+  const out = studentSession.runOutput
+  const shown = testsOn() ? view : 'output'
   const box = useRef<HTMLPreElement>(null)
   const stick = useRef(true)
   const printed = (out?.stdout.length ?? 0) + (out?.stderr.length ?? 0)
@@ -414,56 +474,16 @@ function Console({ question, stdin, onStdin, view, onView, onRun, onTest }: Cons
   }, [printed, shown])
 
   return (
-    <div className="console">
-      <div className="console-box">
-        <div className="console-head">
-          <b className="grow">Entrada</b>
-          {canStop ? (
-            <Pill size="sm" onClick={() => s.stopRun()}>
-              <Square size={14} /> Parar
-            </Pill>
-          ) : (
-            <Pill size="sm" tone="primary" disabled={s.running} title="Rodar (Ctrl+Enter)" onClick={onRun}>
-              {s.running ? <LoaderCircle size={14} className="spin" /> : <Play size={14} />} Rodar
-            </Pill>
-          )}
-          {testsOn && <TestButton closed={!open} onTest={onTest} />}
-        </div>
-        <textarea className="console-in" spellCheck={false} aria-label="Entrada do programa" value={stdin} onChange={(e) => onStdin(e.target.value)} />
-      </div>
-      <div className="console-box">
-        <div className="console-head">
-          <div className="grow">
-            {testsOn ? (
-              <Segmented
-                value={view}
-                onChange={onView}
-                options={[
-                  { value: 'output', label: 'Terminal' },
-                  { value: 'tests', label: 'Testes' },
-                ]}
-              />
-            ) : (
-              <b>Terminal</b>
-            )}
-            {shown === 'output' && out?.where === 'host' && <span className="badge">Máquina do professor</span>}
-          </div>
-          <span className="console-info" title={`Limites: ${RUN_LIMITS.memoryMb} MB de memória, ${RUN_LIMITS.timeMs / 1000} s e ${RUN_LIMITS.outputKb} KB de saída`} aria-label="Limites de execução">
-            <Info size={14} />
-          </span>
-        </div>
-        <pre
-          ref={box}
-          className="console-out"
-          onScroll={(e) => {
-            const el = e.currentTarget
-            stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
-          }}
-        >
-          {shown === 'output' ? <RunOutputView /> : <TestView question={question} />}
-        </pre>
-      </div>
-    </div>
+    <pre
+      ref={box}
+      className="console-out"
+      onScroll={(e) => {
+        const el = e.currentTarget
+        stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
+      }}
+    >
+      {shown === 'output' ? <RunOutputView /> : <TestView question={question} />}
+    </pre>
   )
 }
 

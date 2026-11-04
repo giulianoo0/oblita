@@ -11,7 +11,10 @@ import { DiaTextReveal } from '../ui/DiaTextReveal'
 import { Field, Logo, Markdown, Modal, Pill, Segmented, browserIssue, useTick } from '../ui/kit'
 // Importado direto, não sob demanda: o editor precisa já estar carregado antes de a internet ser cortada.
 import { Beacon } from './Beacon'
+import { BlockLayout, LayoutMenu, useBlockLayout } from './BlockLayout'
+import { toggleCollapse } from './blocks'
 import { CodeWorkspace, PeerDots, useInternalClipboard, usePeers } from './CodeWorkspace'
+import { BLOCK_LIMITS, BLOCK_TITLES, CODE_LAYOUT, OTHER_LAYOUT, layoutKey } from './examLayout'
 import './exam.css'
 import { internalClipboard } from './proctor'
 import { defaultStarter, studentSession as session } from './session'
@@ -667,6 +670,23 @@ function ExamRoom() {
     setRevealing(fresh)
   }, [exam, manual])
 
+  // Cada prova guarda um layout para questões de código e outro para as demais.
+  const kind = codeQuestion ? 'code' : 'other'
+  const blocks = useBlockLayout(layoutKey(s.saved?.roomCode ?? 'sala', kind), kind === 'code' ? CODE_LAYOUT : OTHER_LAYOUT)
+  // O título revelado voa até o enunciado: ele precisa estar aberto para ter onde pousar.
+  const statementClosed = blocks.layout.collapsed.includes('statement')
+  useEffect(() => {
+    if (revealing && statementClosed) blocks.apply(toggleCollapse(blocks.layout, 'statement'))
+  }, [revealing, statementClosed, blocks])
+
+  const statement = question && (
+    <>
+      <Statement question={question} reveal={!revealing && revealedId === question.id} landing={revealing?.id === question.id} />
+      {!s.questionOpen(question.id) && <div className="badge danger" style={{ margin: '0 1.125rem 0.75rem', alignSelf: 'flex-start' }}>Tempo esgotado</div>}
+      {s.config?.mode === 'group' && <GroupBar />}
+    </>
+  )
+
   const locked = !!nextFix(true)
   const hand = async () => {
     setSending(true)
@@ -705,7 +725,8 @@ function ExamRoom() {
           </div>
         )}
         {question && <div className="exam-body">
-          <section className="exam-q">
+          {/* As abas ficam fora dos blocos: com o enunciado recolhido, ainda dá para trocar de questão. */}
+          <div className="exam-bar">
             <div className="exam-tabs" role="tablist" aria-label="Questões">
               {exam.questions.map((q, i) => (
                 <button key={q.id} type="button" className="exam-tab" role="tab" aria-selected={q.id === question.id} title={q.title} onClick={() => setQuestionId(q.id)}>
@@ -715,11 +736,20 @@ function ExamRoom() {
                 </button>
               ))}
             </div>
-            <Statement question={question} reveal={!revealing && revealedId === question.id} landing={revealing?.id === question.id} />
-            {!s.questionOpen(question.id) && <div className="badge danger" style={{ margin: '0 1.125rem 0.75rem', alignSelf: 'flex-start' }}>Tempo esgotado</div>}
-            {s.config?.mode === 'group' && <GroupBar />}
-          </section>
-          {question.type === 'code' ? <CodeWorkspace question={question} /> : question.type === 'choice' ? <ChoiceAnswer question={question} /> : <TextAnswer question={question} />}
+            <LayoutMenu api={blocks} titles={BLOCK_TITLES} />
+          </div>
+          {question.type === 'code' ? (
+            <CodeWorkspace question={question} layout={blocks} statement={statement} />
+          ) : (
+            <BlockLayout
+              api={blocks}
+              limits={BLOCK_LIMITS}
+              blocks={[
+                { id: 'statement', title: BLOCK_TITLES.statement, body: statement },
+                { id: 'answer', title: BLOCK_TITLES.answer, body: question.type === 'choice' ? <ChoiceAnswer question={question} /> : <TextAnswer question={question} /> },
+              ]}
+            />
+          )}
         </div>}
       </div>
       <Modal open={confirming} title="Entregar a prova?" onClose={() => setConfirming(false)}>
