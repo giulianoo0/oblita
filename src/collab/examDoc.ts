@@ -1,7 +1,7 @@
 // O documento de uma pessoa ou equipe. Todos os integrantes e o professor têm uma cópia.
 import * as Y from 'yjs'
 import type { Lang } from '../../shared/exam'
-import type { Answer } from '../../shared/protocol'
+import { validFolder, type Answer } from '../../shared/protocol'
 
 export class ExamDoc {
   readonly doc = new Y.Doc()
@@ -12,6 +12,15 @@ export class ExamDoc {
 
   files(questionId: string) {
     return this.doc.getMap<Y.Text>(`files:${questionId}`)
+  }
+
+  // Só as pastas criadas vazias; a de um arquivo vem do próprio caminho dele.
+  private dirs(questionId: string) {
+    return this.doc.getMap<true>(`dirs:${questionId}`)
+  }
+
+  folders(questionId: string) {
+    return [...this.dirs(questionId).keys()].filter(validFolder).sort()
   }
 
   lang(questionId: string) {
@@ -49,6 +58,41 @@ export class ExamDoc {
 
   removeFile(questionId: string, name: string) {
     this.files(questionId).delete(name)
+  }
+
+  addFolder(questionId: string, path: string) {
+    this.dirs(questionId).set(path, true)
+  }
+
+  // Tudo numa transação: o colega nunca vê metade da pasta no lugar novo.
+  renameFolder(questionId: string, from: string, to: string) {
+    const files = this.files(questionId)
+    const dirs = this.dirs(questionId)
+    const moved = (path: string) => (path === from ? to : path.startsWith(`${from}/`) ? to + path.slice(from.length) : null)
+    this.doc.transact(() => {
+      for (const [name, text] of [...files.entries()]) {
+        const target = moved(name)
+        if (target === null || files.has(target) || !(text instanceof Y.Text)) continue
+        files.set(target, new Y.Text(text.toString()))
+        files.delete(name)
+      }
+      for (const path of [...dirs.keys()]) {
+        const target = moved(path)
+        if (target === null) continue
+        dirs.delete(path)
+        dirs.set(target, true)
+      }
+    })
+  }
+
+  removeFolder(questionId: string, path: string) {
+    const inside = (name: string) => name === path || name.startsWith(`${path}/`)
+    const files = this.files(questionId)
+    const dirs = this.dirs(questionId)
+    this.doc.transact(() => {
+      for (const name of [...files.keys()]) if (inside(name)) files.delete(name)
+      for (const name of [...dirs.keys()]) if (inside(name)) dirs.delete(name)
+    })
   }
 
   snapshot(questionId: string): Extract<Answer, { type: 'code' }> | null {
