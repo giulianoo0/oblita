@@ -7,8 +7,9 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
-const EDGE = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
-const BUN = join(ROOT, 'node_modules', 'bun', 'bin', 'bun.exe')
+// Fora do Windows usa o Chrome e o bun do sistema; BROWSER e BUN trocam os executáveis.
+const EDGE = process.env.BROWSER ?? (process.platform === 'win32' ? 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe' : process.platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : 'google-chrome')
+const BUN = process.env.BUN ?? (process.platform === 'win32' ? join(ROOT, 'node_modules', 'bun', 'bin', 'bun.exe') : 'bun')
 const VITE = join(ROOT, 'node_modules', 'vite', 'bin', 'vite.js')
 export const TOKEN = 'token-do-teste-de-motor'
 
@@ -50,7 +51,8 @@ export function lanAddress() {
 function killTree(p) {
   if (!p?.pid || p.exitCode !== null) return
   // Só a árvore que abrimos: nunca o Edge do usuário.
-  spawnSync('taskkill', ['/PID', String(p.pid), '/T', '/F'], { stdio: 'ignore' })
+  if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(p.pid), '/T', '/F'], { stdio: 'ignore' })
+  else p.kill('SIGKILL')
 }
 
 class Cdp {

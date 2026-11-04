@@ -9,6 +9,7 @@ import {
   PROTOCOL_VERSION,
   RUN_LIMITS,
   TEST_INTERVAL_MS,
+  validFiles,
   type AlertKind,
   type RunReport,
   type TestReport,
@@ -1017,6 +1018,11 @@ export class StudentSession extends Observable {
     const answer = this.answerOf(questionId)
     if (answer?.type !== 'code' || this.testing || Date.now() < this.nextTestAt) return
     const reqId = randomId(6)
+    // O professor recusaria do mesmo jeito; aqui evita compilar à toa um arquivo enorme.
+    if (!validFiles(answer.files)) {
+      this.testReport = { reqId, questionId, status: 'compile-error', log: 'Arquivos fora do limite', nextInMs: 0 }
+      return this.changed()
+    }
     this.testing = true
     this.testStage = 'compiling'
     this.testPosition = null

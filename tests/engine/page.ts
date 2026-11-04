@@ -4,8 +4,9 @@ import { Room } from '../../src/teacher/room'
 import { StudentSession } from '../../src/student/session'
 import { idb } from '../../src/lib/idb'
 import { BEACON, beaconCells } from '../../shared/beacon'
-import { encodeBinary, encodeJson, decodeFrame } from '../../shared/frames'
+import { encodeBinary, encodeJson, decodeFrame, inflate } from '../../shared/frames'
 import { validateExam, validateSolutions } from '../../shared/exam'
+import { PROTOCOL_VERSION } from '../../shared/protocol'
 import { SEALED_TAG, helloTranscript, newEphemeral, newTeacherIdentity, signHello, toB64 } from '../../shared/secure'
 
 const dec = new TextDecoder()
@@ -121,8 +122,9 @@ T.summary = () => {
     docs: Object.fromEntries([...r.docs].map(([k, d]: any) => [k, Object.fromEntries(codeQ.map((q: any) => [q.id, safeSnap(d, q.id)]))])),
     links: r.links.size,
     peers: r.peers.size,
-    gradeQueue: r.gradeQueue.length,
-    gradeRunning: r.gradeRunning,
+    // A fila de trabalho (shared/jobs.ts) junta esperando e rodando.
+    gradeQueue: r.queue?.pending ?? 0,
+    gradeRunning: 0,
   }
 }
 
@@ -170,14 +172,17 @@ T.newStudent = (status: any = {}) => {
   Object.assign(T.proctor, status)
   s.proctor.status = () => ({ ...T.proctor })
   const onMessage = s.onMessage
-  s.onMessage = function (frame: Uint8Array) {
+  s.onMessage = async function (frame: Uint8Array) {
     let t = '?'
+    let text = dec.decode(frame)
     try {
-      const json = decodeFrame(frame).json as any
+      const { json, bytes } = decodeFrame(frame) as any
       t = json?.t
       if (t === 'beacon') T.beaconSeen.add(json.code)
+      // A prova vem comprimida nos bytes: a busca de vazamentos precisa ver o texto aberto.
+      if (t === 'exam' && bytes) text += dec.decode(await inflate(bytes, 64 * 1024 * 1024))
     } catch {}
-    if (t !== 'time') T.rx.push({ t, text: dec.decode(frame) })
+    if (t !== 'time') T.rx.push({ t, text })
     return onMessage.call(s, frame)
   }
   const onPlain = s.onPlain
@@ -325,7 +330,7 @@ T.helloWith = (patch: Record<string, unknown> | null) => {
   if (!patch) return void delete T.s.sendHello
   T.s.sendHello = () => {
     const s = T.s.saved
-    T.s.send({ t: 'hello', v: 1, clientId: s.clientId, name: s.name, lastEvent: 0, lastRec: 0, resumed: false, ...patch })
+    T.s.send({ t: 'hello', v: PROTOCOL_VERSION, clientId: s.clientId, name: s.name, lastEvent: 0, lastRec: 0, resumed: false, ...patch })
   }
 }
 
