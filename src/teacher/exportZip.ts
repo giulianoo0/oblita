@@ -1,12 +1,12 @@
 // Exporta o resultado da sala em .zip, por pessoa ou grupo, gravando direto em disco.
 // O zip é "store" (sem compressão) porque quase tudo em volume é vídeo já comprimido,
 // e usa ZIP64 porque uma turma inteira com gravação passa fácil de 4 GB.
-import { ALERT_LABEL, type AlertKind } from '../../shared/protocol'
+// A estrutura de pastas é a de layout.ts, a mesma que o programa grava na pasta da prova.
 import { idb } from '../lib/idb'
-import type { Grade, Room, Student, Team } from './room'
+import { roomLayout, safeName } from './layout'
+import type { Room } from './room'
 
-// Sala salva antes da validação pode ter `kind` lixo, e "constructor" devolveria uma função.
-export const alertLabel = (kind: string) => (Object.hasOwn(ALERT_LABEL, kind) ? ALERT_LABEL[kind as AlertKind] : String(kind))
+export { alertLabel, safeName } from './layout'
 
 const crcTable = (() => {
   const t = new Uint32Array(256)
@@ -148,109 +148,6 @@ async function* chunks(blob: Blob) {
   }
 }
 
-// O Windows conta em UTF-16, então o corte também: um único caminho acima de 260 faz o
-// Expand-Archive desfazer a extração inteira. Sem cortar um emoji pela metade.
-function cut(text: string, max: number) {
-  let out = ''
-  for (const ch of text) {
-    if (out.length + ch.length > max) break
-    out += ch
-  }
-  return out
-}
-
-// O nome vem digitado pelo aluno. Sem isto, "../../x" escreveria fora da pasta ao extrair,
-// "aux.h" travaria a extração no Windows, e um caractere de direção disfarçaria a extensão.
-export function safeName(name: string) {
-  const bare = String(name)
-    .normalize('NFC')
-    .replace(/[\\/:*?"<>|\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/g, '_')
-  const clean = cut(bare, 80)
-    .trim()
-    .replace(/^\.+/, '_')
-    .replace(/[. ]+$/, '')
-  return /^(con|prn|aux|nul|conin\$|conout\$|com[0-9¹²³]|lpt[0-9¹²³])\s*(\.|$)/i.test(clean) || !clean ? `_${clean}` : clean
-}
-
-// No Windows "Main.cpp" e "main.cpp" são o mesmo arquivo: um apagaria o outro ao extrair.
-const unique = (used: Set<string>, name: string, tail = '') => {
-  let out = name + tail
-  for (let i = 2; used.has(out.toLowerCase()); i++) out = `${name} (${i})${tail}`
-  used.add(out.toLowerCase())
-  return out
-}
-
-const uniqueFile = (used: Set<string>, name: string) => {
-  const dot = name.lastIndexOf('.')
-  return dot > 0 ? unique(used, name.slice(0, dot), name.slice(dot)) : unique(used, name)
-}
-
-const oneLine = (text: string) => text.replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, ' ')
-
-// Fórmula em CSV roda ao abrir no Excel, e o detalhe do alerta vem do aluno.
-const csvCell = (value: string) => {
-  const text = oneLine(value).replace(/"/g, '""')
-  return `"${/^[=+\-@]/.test(text) ? `'${text}` : text}"`
-}
-
-const ext = (mime: string) => (mime.includes('mp4') ? 'mp4' : 'webm')
-const label = (s: Student) => (s.enrollment ? `${s.name} (${s.enrollment})` : s.name)
-const date = (t?: number) => (t ? new Date(t).toLocaleString('pt-BR') : '')
-const hasWork = (team: Team) => Object.keys(team.answers).length > 0 || Object.keys(team.submissions).length > 0
-
-function gradeText(g: Grade | undefined) {
-  if (!g) return 'sem nota'
-  const lines = [`${g.points} de ${g.max} pontos`]
-  if (g.status === 'manual') lines[0] += g.graded ? ' (correção manual)' : ' (falta corrigir)'
-  if (g.status === 'compile-error') lines.push('', 'Não compilou:', g.compileLog ?? '')
-  for (const t of g.tests ?? []) {
-    lines.push(`teste ${t.index + 1}: ${t.passed ? 'passou' : t.timedOut ? 'tempo esgotado' : 'falhou'} (${t.points} pts)`)
-  }
-  return lines.join('\n')
-}
-
-async function writeTeam(zip: ZipWriter, room: Room, team: Team, dir: string, members: Student[], withVideo: boolean, teamName?: string) {
-  const score = room.scoreOf(team)
-  const info = [
-    ...(teamName ? [`Equipe: ${oneLine(teamName)}`] : []),
-    `Pontos: ${score.earned} de ${score.total}`,
-    '',
-    ...members.map((s) => `${oneLine(label(s))}; alertas: ${s.alerts}; entregou: ${date(s.finishedAt) || 'não'}`),
-    '',
-    ...room.exam.questions.map((q) => `${q.id} ${oneLine(q.title)}: ${team.grades[q.id]?.points ?? 0}/${q.points}`),
-  ]
-  await zip.add(`${dir}/resumo.txt`, info.join('\n') + '\n')
-
-  // Um aluno chamado "q1" ou "resumo.txt" não pode cair em cima da questão nem do resumo.
-  const names = new Set(['resumo.txt', 'alertas.csv', 'gravacao'])
-  for (const q of room.exam.questions) {
-    const sub = team.submissions[q.id]
-    const answer = sub?.answer ?? team.answers[q.id]?.answer
-    const base = `${dir}/${unique(names, safeName(q.id))}`
-    if (answer?.type === 'code') {
-      const files = new Set(['nota.txt'])
-      for (const [name, content] of Object.entries(answer.files)) await zip.add(`${base}/${uniqueFile(files, safeName(name))}`, content)
-    } else if (answer?.type === 'text') await zip.add(`${base}/resposta.txt`, answer.text)
-    else if (answer?.type === 'choice') await zip.add(`${base}/resposta.txt`, answer.selected.join(', ') + '\n')
-    else await zip.add(`${base}/sem-resposta.txt`, '')
-    await zip.add(`${base}/nota.txt`, gradeText(team.grades[q.id]) + '\n')
-  }
-
-  for (const s of members) {
-    const who = teamName !== undefined ? `${dir}/${unique(names, safeName(label(s)))}` : dir
-    const alerts = room.alerts.filter((a) => a.clientId === s.clientId).reverse()
-    const rows = ['hora;evento;detalhe', ...alerts.map((a) => [date(a.at), alertLabel(a.kind), a.detail ?? ''].map(csvCell).join(';'))]
-    await zip.add(`${who}/alertas.csv`, '\ufeff' + rows.join('\n') + '\n')
-    if (!withVideo) continue
-    // O número do segmento veio do aluno e vira nome de arquivo.
-    const segments = Object.values(s.segments).filter((seg) => Number.isSafeInteger(seg.segment) && seg.segment >= 0)
-    for (const seg of segments.sort((a, b) => a.segment - b.segment)) {
-      const blob = await room.segmentBlob(s.clientId, seg)
-      if (blob.size) await zip.add(`${who}/gravacao/${String(seg.segment).padStart(4, '0')}.${ext(seg.mime)}`, blob)
-    }
-  }
-}
-
 export interface ExportOptions {
   video: boolean
   onProgress?: (done: number, total: number) => void
@@ -259,30 +156,18 @@ export interface ExportOptions {
 // Só lê o que é público da sala: token, chave e códigos de equipe nunca passam por aqui.
 export async function writeRoomZip(room: Room, sink: Sink, opts: ExportOptions) {
   const zip = new ZipWriter(sink)
-  await zip.add('resumo.csv', '\ufeff' + room.resultsCsv() + '\n')
-  await zip.add('prova.json', JSON.stringify(room.exam, null, 2))
-
-  const students = [...room.students.values()]
-  const teamMode = room.config.mode === 'group'
-  const groups = teamMode ? room.config.groups : []
-  const known = new Set(groups.map((g) => g.id))
-  const loose = students.filter((s) => !teamMode || !s.groupId || !known.has(s.groupId))
-  const total = groups.length + loose.length
-  let done = 0
-  const teamDirs = new Set<string>()
-  for (const g of groups) {
-    const members = students.filter((s) => s.groupId === g.id)
-    // Sem integrantes, ainda vale se fez a prova: o professor pode ter movido todo mundo.
-    const team = members[0] ? room.teamOf(members[0]) : room.teams.get(`g:${g.id}`)
-    if (team && (members.length || hasWork(team))) {
-      await writeTeam(zip, room, team, `grupos/${unique(teamDirs, safeName(g.name))}`, members, opts.video, g.name)
-    }
-    opts.onProgress?.(++done, total)
+  const [root, ...units] = roomLayout(room)
+  const add = async (entry: (typeof root)[number]) => {
+    if ('text' in entry) return zip.add(entry.path, entry.text())
+    if (!opts.video) return
+    const blob = await room.segmentBlob(entry.segment.clientId, entry.segment.info)
+    if (blob.size) await zip.add(entry.path, blob)
   }
-  const studentDirs = new Set<string>()
-  for (const s of loose) {
-    await writeTeam(zip, room, room.teamOf(s), `alunos/${unique(studentDirs, safeName(label(s)))}`, [s], opts.video)
-    opts.onProgress?.(++done, total)
+  for (const entry of root) await add(entry)
+  let done = 0
+  for (const unit of units) {
+    for (const entry of unit) await add(entry)
+    opts.onProgress?.(++done, units.length)
   }
   await zip.finish()
 }
