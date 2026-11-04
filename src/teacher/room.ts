@@ -37,6 +37,7 @@ import { Observable, randomId } from '../lib/store'
 import { addTime, expiredQuestions, isOpen, isVisible, release, visibleExam, withdraw, type Flow, type QuestionClocks } from '../../shared/flow'
 import { ExamDoc } from '../collab/examDoc'
 import { connectHubBus, connectRtcBus, type Bus } from '../net/bus'
+import { hubUrls } from '../net/link'
 import { compile, run, setCompilePool, type CompileResult } from '../compiler/client'
 import { sandboxPort } from '../compiler/sandbox'
 import { RoomStore, type KV, type RoomState } from './roomStore'
@@ -237,6 +238,8 @@ export class Room extends Observable {
   bus: Bus | null = null
   busState: 'none' | 'connecting' | 'hub' | 'rtc' | 'down' = 'none'
   hubAddresses: string[] = []
+  // Onde os alunos abrem o site servido pelo programa. Vazio se esta versão do programa não serve.
+  hubSite: string[] = []
   onAlert: ((a: AlertEntry) => void) | null = null
 
   private peers = new Map<string, string>()
@@ -1226,7 +1229,7 @@ export class Room extends Observable {
     this.disk = null
     let link: FileLink
     try {
-      link = await FileLink.connect(token, { url: `ws://localhost:${HUB_PORT}/ws/files` })
+      link = await FileLink.connect(token, { url: `${hubUrls('localhost', HUB_PORT).ws}/ws/files` })
     } catch {
       // Programa antigo, sem a rota de arquivos: tudo segue no navegador, como antes.
       this.storage = { ...this.storage, mode: 'browser' }

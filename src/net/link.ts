@@ -1,5 +1,5 @@
 // Lado do aluno: uma conexão com o professor, seja pelo IP ou por WebRTC.
-import { HUB_PORT } from '../../shared/protocol'
+import { FRONT_PORT, HUB_PORT } from '../../shared/protocol'
 import { DataPipe, RTC_CONFIG, signalUrl, waitIce } from './rtc'
 
 export interface Link {
@@ -17,6 +17,18 @@ export class LinkError extends Error {
   constructor(readonly code: ConnectError) {
     super(code)
   }
+}
+
+// Página aberta pelo programa, na porta do site: o hub é a própria origem, sem IP para digitar
+// e sem permissão de rede local.
+export const servedByHost = () => typeof location !== 'undefined' && location.port === String(FRONT_PORT)
+
+// Só o computador do professor recebe o token do painel.
+export const onTeacherMachine = () => location.hostname === 'localhost' || location.hostname === '127.0.0.1'
+
+export function hubUrls(host: string, port: number) {
+  if (!servedByHost()) return { http: `http://${host}:${port}`, ws: `ws://${host}:${port}` }
+  return { http: location.origin, ws: `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}` }
 }
 
 export function parseAddress(input: string): { host: string; port: number } | null {
@@ -38,8 +50,8 @@ export function addressSpace(host: string): 'local' | 'loopback' | undefined {
 export async function pingHub(host: string, port: number, timeoutMs = 5000) {
   const init: RequestInit & { targetAddressSpace?: string } = { signal: AbortSignal.timeout(timeoutMs), cache: 'no-store' }
   const space = addressSpace(host)
-  if (space) init.targetAddressSpace = space
-  const res = await fetch(`http://${host}:${port}/ping`, init)
+  if (space && !servedByHost()) init.targetAddressSpace = space
+  const res = await fetch(`${hubUrls(host, port).http}/ping`, init)
   const body = (await res.json()) as { app?: string; host?: boolean }
   if (body.app !== 'oblita') throw new LinkError('unreachable')
   return body
@@ -71,7 +83,7 @@ export async function connectHub(address: string): Promise<Link> {
     throw new LinkError((await permissionDenied(host)) ? 'permission' : 'unreachable')
   }
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws://${host}:${port}/ws/student`)
+    const ws = new WebSocket(`${hubUrls(host, port).ws}/ws/student`)
     ws.binaryType = 'arraybuffer'
     const link: Link = {
       kind: 'hub',

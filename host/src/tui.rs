@@ -217,7 +217,7 @@ pub fn format_bytes(bytes: u64) -> String {
 
 fn draw(frame: &mut Frame, app: &App, screen: &Screen) {
     let [top, folder_area, log_area, menu_area] =
-        Layout::vertical([Constraint::Length(7), Constraint::Length(5), Constraint::Min(3), Constraint::Length(1)]).areas(frame.area());
+        Layout::vertical([Constraint::Length(9), Constraint::Length(5), Constraint::Min(3), Constraint::Length(1)]).areas(frame.area());
     let [logo_area, status_area] = Layout::horizontal([Constraint::Length(32), Constraint::Min(20)]).areas(top);
 
     let brand = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
@@ -251,6 +251,10 @@ fn status_lines(app: &App, screen: &Screen) -> Vec<Line<'static>> {
     }
     for (name, ip) in &screen.addresses {
         lines.push(Line::from(vec![Span::styled(format!("  {ip}:{}", crate::port()), Style::default().add_modifier(Modifier::BOLD)), Span::styled(format!("  ({name})"), off)]));
+    }
+    if crate::front_up() {
+        lines.push(Line::from(format!("Sem baixar nada: alunos em https://IP:{}", crate::FRONT_PORT)));
+        lines.push(Line::from(format!("Professor neste computador: http://localhost:{}", crate::FRONT_PORT)));
     }
     lines
 }

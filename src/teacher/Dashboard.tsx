@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import type { Group, Phase } from '../../shared/protocol'
 import { formatClock, useObservable } from '../lib/store'
 import { detectHub } from '../net/bus'
+import { servedByHost } from '../net/link'
 import { BuildVersion } from '../ui/BuildVersion'
 import { Avatar, Logo, Modal, Pill, Popover, PopoverRow, Segmented, Switch, useTick } from '../ui/kit'
 import { alertLabel, canStreamToDisk, download, exportRoomZip, safeName } from './exportZip'
@@ -162,6 +163,8 @@ function beep() {
 const prefersBrowser = new WeakSet<Room>()
 
 const loopbackGranted = async () => {
+  // Na porta do programa o hub é a própria origem: não há permissão a pedir.
+  if (servedByHost()) return true
   try {
     const perm = await navigator.permissions.query({ name: 'loopback-network' as PermissionName })
     return perm.state === 'granted'
@@ -175,6 +178,7 @@ async function connectProgram(room: Room) {
   const hub = await detectHub()
   if (!hub) return false
   room.hubAddresses = hub.addresses
+  room.hubSite = hub.site ?? []
   await room.useHub('localhost', hub.token)
   return true
 }
@@ -462,6 +466,8 @@ function ConnectionCard({ room }: { room: Room }) {
   const [failed, setFailed] = useState(false)
   const state = room.busState
   const connecting = busy || state === 'connecting'
+  // Servida pelo programa, sem o site e o sinal de lá: "só navegador" não existiria, e ele já está aberto.
+  const hosted = servedByHost()
 
   // A reconexão sozinha mora em useRoomRuntime; aqui só some o aviso quando ela consegue.
   useEffect(() => {
@@ -508,6 +514,17 @@ function ConnectionCard({ room }: { room: Room }) {
         ) : (
           <div className="errbox">Este computador não está em nenhuma rede local.</div>
         )}
+        {room.hubSite.length > 0 && (
+          <div className="stack" style={{ gap: 0 }}>
+            <span className="conn-label">Sem o site baixado</span>
+            {room.hubSite.map((url) => (
+              <span key={url} className="mono small">
+                {url}
+              </span>
+            ))}
+            <span className="muted small">O navegador avisa sobre o certificado: Avançado e Continuar.</span>
+          </div>
+        )}
         <TeacherCode room={room} />
       </div>
     )
@@ -535,14 +552,16 @@ function ConnectionCard({ room }: { room: Room }) {
     <div className="card conn">
       <div className="row wrap">
         <h2 className="grow">Conexão</h2>
-        <Segmented
-          value={mode}
-          onChange={setMode}
-          options={[
-            { value: 'hub', label: 'Programa' },
-            { value: 'rtc', label: 'Só navegador' },
-          ]}
-        />
+        {!hosted && (
+          <Segmented
+            value={mode}
+            onChange={setMode}
+            options={[
+              { value: 'hub', label: 'Programa' },
+              { value: 'rtc', label: 'Só navegador' },
+            ]}
+          />
+        )}
       </div>
       <TeacherCode room={room} />
       {state === 'down' && room.students.size > 0 && <div className="errbox">Conexão caiu. O trabalho dos alunos segue salvo neles.</div>}
@@ -559,7 +578,7 @@ function ConnectionCard({ room }: { room: Room }) {
           {connecting && <Loader2 size={16} className="spin" />}
           {state === 'down' ? 'Reconectar' : missing ? 'Tentar de novo' : mode === 'hub' ? 'Conectar ao programa' : 'Abrir no navegador'}
         </Pill>
-        {mode === 'hub' && (
+        {mode === 'hub' && !hosted && (
           <a className="pill" href={HOST_URL} rel="noreferrer">
             <Download size={16} /> Baixar
           </a>

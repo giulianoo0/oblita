@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom'
 import { Link, useNavigate } from 'react-router-dom'
 import { idb } from '../lib/idb'
 import { unpinBuild } from '../lib/offline'
+import { onTeacherMachine, servedByHost } from '../net/link'
 import { Eagle } from '../ui/Eagle'
 
 // O lucide não traz mais logos de marca: o do GitHub vai aqui, em 16 px.
@@ -113,6 +114,8 @@ export function Home() {
 
   // No computador o card sai do lugar para virar o modal; um espaço igual segura a grade.
   const morphing = joining && !narrow
+  // Pela rede, na porta do programa, quem chega é aluno: o painel só abre no computador do professor.
+  const teacherHere = !servedByHost() || onTeacherMachine()
 
   return (
     <div className="home">
@@ -121,7 +124,7 @@ export function Home() {
         <h1 className="home-title">
           <span className="home-line">provas online de</span> <span className="home-line">código <span className="home-word">sem cola.</span></span>
         </h1>
-        <div className="role-grid">
+        <div className={teacherHere ? 'role-grid' : 'role-grid solo'}>
           {morphing ? (
             <div className="role-card role-ghost" aria-hidden="true" />
           ) : (
@@ -132,10 +135,12 @@ export function Home() {
               </motion.span>
             </motion.button>
           )}
-          <Link to="/nova" className="role-card brand">
-            <Presentation size={28} />
-            <b>Sou professor</b>
-          </Link>
+          {teacherHere && (
+            <Link to="/nova" className="role-card brand">
+              <Presentation size={28} />
+              <b>Sou professor</b>
+            </Link>
+          )}
         </div>
       </main>
       {createPortal(<AnimatePresence>{joining && <JoinOverlay key="join" narrow={narrow} onClose={close} onJoined={joined} />}</AnimatePresence>, document.body)}

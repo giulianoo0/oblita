@@ -37,6 +37,12 @@ function OfflineStatus() {
         <Check size={14} /> Baixado neste computador
       </div>
     )
+  if (offline.status === 'hosted')
+    return (
+      <div className="status-chip ok" title="A página vem do programa do professor, pela rede local. Não precisa de internet.">
+        <Check size={14} /> Servido pelo programa
+      </div>
+    )
   if (offline.status === 'error')
     return (
       <div className="status-chip bad" title="Sem isso a prova não abre sem internet. Recarregue com internet.">

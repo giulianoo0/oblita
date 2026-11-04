@@ -1,8 +1,9 @@
 // Instalação da página: uma visita com internet e ela passa a abrir sozinha, sem rede.
 import { useEffect, useState } from 'react'
+import { servedByHost } from '../net/link'
 import { idb, requestPersistence } from './idb'
 
-export type OfflineState = { status: 'unsupported' | 'installing' | 'ready' | 'error'; done: number; total: number; update: string | null }
+export type OfflineState = { status: 'unsupported' | 'installing' | 'ready' | 'error' | 'hosted'; done: number; total: number; update: string | null }
 
 // A versão desta aba, gravada no build (vite.config.ts). O service worker guarda a de cada cache.
 export const BUILD = __BUILD__
@@ -23,6 +24,9 @@ function set(next: OfflineState) {
 }
 
 export function startOffline() {
+  // Quem serve a página é o programa do professor, então não há o que baixar. Em https com
+  // certificado próprio o navegador nem deixaria registrar o service worker.
+  if (servedByHost()) return set({ ...state, status: 'hosted' })
   if (!('serviceWorker' in navigator) || import.meta.env.DEV) return set({ ...state, status: 'unsupported' })
   navigator.serviceWorker.addEventListener('message', (e: MessageEvent) => {
     const m = e.data

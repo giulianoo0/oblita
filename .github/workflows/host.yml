@@ -7,6 +7,14 @@ on:
     paths:
       - 'host/**'
       - '.github/workflows/host.yml'
+      # O site vai dentro do .exe, então mudar o site também gera um programa novo.
+      - 'src/**'
+      - 'shared/**'
+      - 'public/**'
+      - 'index.html'
+      - 'package-lock.json'
+      - 'vite.config.ts'
+      - 'scripts/postbuild.mjs'
   workflow_dispatch:
 
 permissions:
@@ -24,6 +32,20 @@ jobs:
         working-directory: host
     steps:
       - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Build site
+        working-directory: .
+        run: |
+          npm ci --ignore-scripts
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          npx vite build
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          node scripts/postbuild.mjs
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
       - uses: dtolnay/rust-toolchain@stable
         with:

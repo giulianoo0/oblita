@@ -189,6 +189,55 @@ try {
   WaitPing { param($p) $p.students -eq 0 -and $p.host -eq $true } 'contagem final em /ping'
 
   if ($process) {
+    # O site embutido, na mesma porta em http e https.
+    $front = 'http://127.0.0.1:3067'
+    $secure = 'https://127.0.0.1:3067'
+    $code = { param($url, [string[]]$extra = @()) & curl.exe -s -k --max-time 10 -o NUL -w '%{http_code}' @extra $url }
+    $up = $false
+    for ($i = 0; $i -lt 40 -and -not $up; $i++) {
+      $up = (& $code "$front/") -eq '200'
+      if (-not $up) { Start-Sleep -Milliseconds 250 }
+    }
+    Check $up 'site em http no próprio computador'
+    Check ((& $code "$secure/") -eq '200') 'site em https'
+    Check ((& curl.exe -s -k --max-time 10 "$secure/") -match 'id="root"') 'é a página do app'
+    Check ((& $code "$front/nova") -eq '200') 'rota do app devolve a página'
+    Check ((& $code "$front/assets/nao-existe.js") -eq '404') 'arquivo inexistente é 404, não a página'
+    Check ((& curl.exe -s -k --max-time 10 "$secure/ping") -match '"app":"oblita"') 'hub também nesta porta, em https'
+    Check ((& $code "$front/host-token") -eq '403') 'token não sai sem ser a própria página'
+    $own = @('-H', 'Sec-Fetch-Site: same-origin')
+    Check ((& $code "$front/host-token" $own) -eq '200') 'a própria página recebe o token'
+    Check ((& $code "$front/host-token" ($own + @('-H', 'Host: exemplo.com:3067'))) -eq '403') 'outro domínio apontado para cá não recebe o token'
+    Check ((& $code "$base/") -eq '404') 'a porta 7787 segue só com o hub'
+    $site = (& curl.exe -s --max-time 5 -H "Origin: $origin" "$base/host-token") | ConvertFrom-Json
+    Check ($site.PSObject.Properties.Name -contains 'site') 'o token diz onde os alunos abrem o site'
+
+    # Ida e volta do painel e do aluno pela porta do site, em https.
+    $ws = New-Object Net.WebSockets.ClientWebSocket
+    # Em C#: um bloco do PowerShell não roda na thread em que o TLS chama a validação.
+    Add-Type 'public static class OblitaTls { public static readonly System.Net.Security.RemoteCertificateValidationCallback Any = (a, b, c, d) => true; }'
+    $ws.Options.RemoteCertificateValidationCallback = [OblitaTls]::Any
+    WaitTask $ws.ConnectAsync([Uri]'wss://127.0.0.1:3067/ws/student', $never) 'wss do aluno'
+    Check ($ws.State -eq 'Open') 'aluno conecta em wss pela porta do site'
+    WaitPing { param($p) $p.students -eq 1 } 'aluno em wss chega ao mesmo hub'
+    [void]$ws.CloseOutputAsync($normal, '', $never)
+
+    $manifest = (& curl.exe -s --max-time 10 "$front/precache.json") | ConvertFrom-Json
+    $big = @($manifest.files | Where-Object { $_.gz })
+    Check ($big.Count -gt 0) 'compilador listado'
+    foreach ($file in $big) {
+      $head = (& curl.exe -s -I --max-time 10 "$front$($file.url)") -join "`n"
+      Check ($head -match '(?i)content-encoding:\s*gzip') "$($file.url) sai comprimido"
+    }
+    $wasm = $big | Where-Object { $_.url -like '*.wasm' } | Select-Object -First 1
+    Check (((& curl.exe -s -I --max-time 10 "$front$($wasm.url)") -join "`n") -match '(?i)content-type:\s*application/wasm') 'wasm com o tipo certo'
+    $lan = Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } | Select-Object -First 1 -ExpandProperty IPAddress
+    if ($lan) {
+      Check ((& $code "http://${lan}:3067/nova") -eq '308') 'http pela rede redireciona para https'
+      Check ((& $code "https://${lan}:3067/nova") -eq '200') 'https pela rede'
+      Check ((& $code "https://${lan}:3067/host-token" $own) -eq '403') 'token nunca sai pela rede'
+    }
+
     Check (-not $process.HasExited) 'programa continua rodando'
     Start-Sleep -Milliseconds 300
     Stop-Process -Id $process.Id -Force

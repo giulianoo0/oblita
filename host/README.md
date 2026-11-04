@@ -39,6 +39,10 @@ O protocolo é o de `shared/frames.ts`, e `server/hub.ts` é a versão em TypeSc
 
 TCP 7787 em todas as interfaces. Se ela estiver ocupada, normalmente há outra janela do programa aberta, e o erro explica isso na tela.
 
+## Site embutido
+
+O programa traz o site inteiro e o serve na porta 3067, sem depender do `oblita.giuli.dev`: o professor abre `http://localhost:3067` e os alunos `https://IP:3067`, com um aviso de certificado que se aceita em Avançado e Continuar. Se a porta 3067 estiver ocupada, só o site fica de fora; o hub na 7787 continua. Com `--porta` a 3067 não abre. O CI compila o site antes do programa; localmente, rode `npx vite build` e `node scripts/postbuild.mjs` antes do `cargo build`, senão o programa sai sem o site.
+
 ## Firewall
 
 Ao abrir, o programa tenta criar uma regra de entrada para o próprio `.exe` nas redes privadas e públicas, se ela ainda não existir. Isso exige administrador. Sem essa permissão, basta clicar em Permitir no aviso do Windows ou abrir o programa como administrador uma vez. Cancelar esse aviso faz o Windows criar regras de bloqueio chamadas `oblita-host`, e bloqueio vence liberação; abrir como administrador também as apaga. Em computadores de domínio (comum em escolas), a regra precisa ser criada à mão ou pela TI, porque ela não cobre o perfil de domínio.

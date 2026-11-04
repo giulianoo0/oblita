@@ -105,6 +105,7 @@ Máquina do aluno
 | Modo | Requisitos | F5 sem internet |
 |---|---|---|
 | Programa + IP (principal) | Chromium ≥ 147, página baixada, porta liberada, permissão de rede local | Reconecta sozinho |
+| Programa + `https://IP:3067` | Só o programa e um Chromium, sem nada baixado antes. Aviso de certificado | Reconecta, com o programa aberto |
 | Só navegador + código | Todos entram antes do corte, na mesma rede, aba do professor aberta | **Não reconecta** |
 
 ## 6. Formatos
@@ -332,6 +333,19 @@ Decisão do dono, substituindo os grupos definidos pelo professor e a trava por 
 **Rebaixar ou subir para falar com o professor:** se o aluno for recusado com `version` e houver em cache uma versão com o protocolo do professor, a página fixa essa versão, recarrega nela e avisa. Durante a prova (o professor trocou de versão no meio), oferece a troca num aviso, com um clique. Sem versão compatível em cache, diz quem precisa atualizar. A fixação some quando o aluno sai da prova, e expira sozinha em 12 h.
 
 **Execução isolada sem rede:** o sandbox do professor (seção 8) não baixa nada: o código do worker vai dentro do próprio pacote, então não há arquivo extra no precache.
+
+### Site embutido no programa
+
+O `oblita-host.exe` traz o site inteiro, igual ao publicado, e o serve na porta **3067**. Nada disso depende do `oblita.giuli.dev`, que segue funcionando normalmente pela porta 7787.
+
+- **Professor:** `http://localhost:3067`. Localhost conta como contexto seguro, então não há aviso.
+- **Alunos:** `https://IP:3067`, com certificado gerado pelo programa e guardado em `%LOCALAPPDATA%\Oblita`, para não mudar entre aberturas. O navegador avisa uma vez, e é preciso clicar em Avançado e Continuar.
+- A mesma porta atende http e https, olhando o primeiro byte da conexão. `http://IP:3067` redireciona para https, porque nesse endereço o navegador não libera a captura de tela nem a cifra.
+- A página e o hub ficam na mesma origem, então não há pedido de permissão de rede local nem IP para digitar.
+- **Sem service worker nesse modo:** em https com certificado próprio o navegador não deixa registrar. Quem entra por aqui depende do programa aberto para recarregar a página, o que já é o caso durante a prova.
+- O modo "só navegador" não existe nessa porta, porque não há sinalização sem o site.
+- O token do painel só sai para a própria máquina: `Sec-Fetch-Site: same-origin` com `Host` igual a `localhost:3067` ou `127.0.0.1:3067`.
+- O canal cifrado de ponta a ponta continua igual, por cima do TLS.
 
 ## 16. Decisões em aberto
 

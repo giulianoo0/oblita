@@ -6,7 +6,7 @@ import { toast } from 'sonner'
 import type { ChoiceQuestion, Question, TextQuestion } from '../../shared/exam'
 import { switchBuild, versionFix, type VersionFix } from '../lib/offline'
 import { formatClock, useObservable } from '../lib/store'
-import { parseAddress, type ConnectError } from '../net/link'
+import { parseAddress, servedByHost, type ConnectError } from '../net/link'
 import { BuildVersion } from '../ui/BuildVersion'
 import { DiaTextReveal } from '../ui/DiaTextReveal'
 import { useHideSiteHeader } from '../ui/SiteHeader'
@@ -162,8 +162,10 @@ export function JoinForm({ onJoined }: { onJoined?: () => void }) {
   const saved = s.saved
   const [params] = useSearchParams()
   const ipParam = params.get('ip')?.trim() ?? ''
-  const [mode, setMode] = useState<'ip' | 'code'>(saved?.via.kind === 'rtc' ? 'code' : 'ip')
-  const [address, setAddress] = useState(saved?.via.kind === 'hub' ? saved.via.address : ipParam || lastIp())
+  // Aberto pelo programa do professor já se sabe onde é a prova: sobra só o passo do nome.
+  const hosted = servedByHost()
+  const [mode, setMode] = useState<'ip' | 'code'>(!hosted && saved?.via.kind === 'rtc' ? 'code' : 'ip')
+  const [address, setAddress] = useState(hosted ? location.host : saved?.via.kind === 'hub' ? saved.via.address : ipParam || lastIp())
   const [code, setCode] = useState(saved?.via.kind === 'rtc' ? saved.via.code : '')
   const [name, setName] = useState(saved?.name ?? '')
   const [enrollment, setEnrollment] = useState(saved?.enrollment ?? '')
@@ -172,7 +174,7 @@ export function JoinForm({ onJoined }: { onJoined?: () => void }) {
   const [busy, setBusy] = useState(false)
   const [badPlace, setBadPlace] = useState(false)
   // Quem já tem o lugar (voltou recusado, ou veio com o IP na URL) começa no segundo passo.
-  const [step, setStep] = useState<0 | 1>(saved || ipParam ? 1 : 0)
+  const [step, setStep] = useState<0 | 1>(saved || ipParam || hosted ? 1 : 0)
   const [measure, height] = useHeight()
 
   // A sala é quem diz se tem senha. O campo fica depois de aparecer, senão some enquanto tenta de novo.
@@ -223,10 +225,12 @@ export function JoinForm({ onJoined }: { onJoined?: () => void }) {
 
   return (
     <form className="join" onSubmit={submit}>
-      <div className="join-progress" aria-hidden="true">
-        <i className="done" />
-        <i className={step === 1 ? 'done' : ''} />
-      </div>
+      {!hosted && (
+        <div className="join-progress" aria-hidden="true">
+          <i className="done" />
+          <i className={step === 1 ? 'done' : ''} />
+        </div>
+      )}
       <motion.div className="join-viewport" initial={false} animate={{ height }} transition={HEIGHT}>
       <div ref={measure}>
       <AnimatePresence mode="wait" initial={false}>
@@ -259,10 +263,12 @@ export function JoinForm({ onJoined }: { onJoined?: () => void }) {
           </motion.div>
         ) : (
           <motion.div key="who" className="join-step" {...STEP_MOTION}>
-            <button type="button" className="join-place" onClick={() => setStep(0)} disabled={entering} title="Trocar">
-              <span className="mono">{place}</span>
-              <span className="muted">trocar</span>
-            </button>
+            {!hosted && (
+              <button type="button" className="join-place" onClick={() => setStep(0)} disabled={entering} title="Trocar">
+                <span className="mono">{place}</span>
+                <span className="muted">trocar</span>
+              </button>
+            )}
             <h2>Quem é você?</h2>
             <div className="join-row">
               <input className="input join-big" autoFocus autoComplete="off" maxLength={60} aria-label="Nome" placeholder="Seu nome" value={name} onChange={(e) => setName(e.target.value)} />

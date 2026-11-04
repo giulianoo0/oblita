@@ -8,5 +8,6 @@ tests/wasm-report.json
 .claude/settings.local.json
 dist-deploy
 e2e/shots
+e2e/shots-manual
 .claude
 *.tsbuildinfo

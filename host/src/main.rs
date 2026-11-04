@@ -10,11 +10,13 @@ mod tui;
 
 use std::{
     collections::{BTreeMap, HashMap},
+    convert::Infallible,
+    fs,
     io::{self, IsTerminal},
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex, MutexGuard,
     },
     time::{Duration, Instant},
@@ -23,24 +25,34 @@ use std::{
 use app::App;
 
 use axum::{
-    body::Bytes,
+    body::{Body, Bytes},
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         ConnectInfo, Query, Request, State,
     },
-    http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
+    http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::get,
     serve::ListenerExt,
     Json, Router,
 };
+use hyper_util::rt::{TokioIo, TokioTimer};
+use rust_embed::Embed;
 use serde_json::json;
 use tokio::{
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
     sync::{mpsc, Notify},
     time::{self, timeout},
 };
+use tokio_rustls::{
+    rustls::{
+        pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
+        ServerConfig,
+    },
+    TlsAcceptor,
+};
+use tower::ServiceExt;
 
 const HUB_PORT: u16 = 7787;
 // Outra porta só com --porta, para testar com outro hub já aberto na 7787.
@@ -49,7 +61,26 @@ static PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(HU
 pub fn port() -> u16 {
     PORT.load(Ordering::Relaxed)
 }
-const HUB_ORIGINS: [&str; 3] = ["https://oblita.giuli.dev", "http://localhost:5173", "http://localhost:3000"];
+pub const FRONT_PORT: u16 = 3067;
+// Fica falso se a porta do site não abriu: aí nenhuma tela anuncia esse endereço.
+static FRONT_UP: AtomicBool = AtomicBool::new(false);
+
+pub fn front_up() -> bool {
+    FRONT_UP.load(Ordering::Relaxed)
+}
+const HUB_ORIGINS: [&str; 7] = [
+    "https://oblita.giuli.dev",
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://localhost:3067",
+    "http://127.0.0.1:3067",
+    "https://localhost:3067",
+    "https://127.0.0.1:3067",
+];
+const FRONT_HOSTS: [&str; 2] = ["localhost:3067", "127.0.0.1:3067"];
+// O primeiro byte de um aperto de mão TLS. Assim a mesma porta atende http e https.
+const TLS_HANDSHAKE: u8 = 0x16;
+const FIRST_BYTE_LIMIT: Duration = Duration::from_secs(15);
 const MAX_STUDENTS: usize = 512;
 // Uma sala inteira pode estar atrás de um mesmo NAT (até ~100 alunos), e todos contam como um IP
 // só: por isso o teto por IP tem de caber a sala, não 16. Continua abaixo do limite global de 512,
@@ -412,14 +443,23 @@ async fn ping(State(hub): State<Arc<Hub>>) -> Json<serde_json::Value> {
     Json(json!({ "app": "oblita", "v": 1, "students": students, "host": host }))
 }
 
+// Na porta do site o pedido é da mesma origem, e o navegador nem manda Origin. Sec-Fetch-Site só ele
+// define, e o Host barra um domínio qualquer que alguém tenha apontado para 127.0.0.1.
+fn from_own_page(headers: &HeaderMap) -> bool {
+    let same_origin = headers.get("sec-fetch-site").is_some_and(|v| v == "same-origin");
+    let host = headers.get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or("");
+    same_origin && FRONT_HOSTS.contains(&host)
+}
+
 // Só quem está na própria máquina do professor, numa página do Oblita, recebe o token.
 async fn host_token(ConnectInfo(peer): ConnectInfo<SocketAddr>, State(hub): State<Arc<Hub>>, headers: HeaderMap) -> Response {
     let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()).unwrap_or("");
-    if !is_loopback(peer.ip()) || !HUB_ORIGINS.contains(&origin) {
+    if !is_loopback(peer.ip()) || !(HUB_ORIGINS.contains(&origin) || from_own_page(&headers)) {
         return (StatusCode::FORBIDDEN, Json(json!({ "error": "forbidden" }))).into_response();
     }
     let addresses: Vec<String> = lan_addresses().into_iter().map(|(_, ip)| ip.to_string()).collect();
-    Json(json!({ "token": hub.token, "addresses": addresses })).into_response()
+    let site: Vec<String> = if front_up() { addresses.iter().map(|ip| format!("https://{ip}:{FRONT_PORT}")).collect() } else { Vec::new() };
+    Json(json!({ "token": hub.token, "addresses": addresses, "site": site })).into_response()
 }
 
 async fn ws_host(
@@ -521,24 +561,21 @@ fn ensure_firewall() {
     // Cancelar o aviso do Windows cria regras de bloqueio com o nome do .exe, e bloqueio vence liberação.
     // Sem administrador este comando só falha, e nada muda.
     netsh(&["delete", "rule", "name=oblita-host", program.as_str()]);
-    if netsh(&["show", "rule", rule.as_str()]) {
+    // Uma regra por porta: quem já tinha a do hub, de uma versão anterior, ainda precisa da do site.
+    let site_rule = format!("name=Oblita Host site - {}", exe.display());
+    let add = |rule: &str, port: u16| {
+        let port = format!("localport={port}");
+        netsh(&["show", "rule", rule])
+            || netsh(&["add", "rule", rule, "dir=in", "action=allow", program.as_str(), "enable=yes", "profile=private,public", "protocol=TCP", port.as_str()])
+    };
+    if netsh(&["show", "rule", rule.as_str()]) && netsh(&["show", "rule", site_rule.as_str()]) {
         log!("Firewall: regra deste programa já existe.");
         return;
     }
-    let port = format!("localport={}", port());
-    let added = netsh(&[
-        "add",
-        "rule",
-        rule.as_str(),
-        "dir=in",
-        "action=allow",
-        program.as_str(),
-        "enable=yes",
-        "profile=private,public",
-        "protocol=TCP",
-        port.as_str(),
-    ]);
-    if added {
+    // Sem curto-circuito: sem a regra do hub, ainda vale tentar a do site, e vice-versa.
+    let hub_added = add(rule.as_str(), port());
+    let site_added = add(site_rule.as_str(), FRONT_PORT);
+    if hub_added && site_added {
         log!("Firewall: programa liberado para os alunos conectarem.");
     } else {
         log!("Firewall: se o Windows perguntar, clique em Permitir e marque redes privadas e públicas.");
@@ -574,6 +611,189 @@ fn explain_bind(error: io::Error) -> String {
     }
 }
 
+// ---- o site embutido: funciona sem o oblita.giuli.dev e sem internet nenhuma
+
+#[derive(Embed)]
+#[folder = "../dist"]
+struct Front;
+
+fn content_type(path: &str) -> &'static str {
+    match path.rsplit('.').next().unwrap_or("") {
+        "html" => "text/html; charset=utf-8",
+        "js" => "text/javascript",
+        "css" => "text/css",
+        "json" | "webmanifest" => "application/json",
+        "wasm" => "application/wasm",
+        "tar" => "application/x-tar",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "woff2" => "font/woff2",
+        "ttf" => "font/ttf",
+        "txt" => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
+    }
+}
+
+async fn front_file(method: Method, uri: Uri) -> Response {
+    if method != Method::GET && method != Method::HEAD {
+        return StatusCode::METHOD_NOT_ALLOWED.into_response();
+    }
+    let path = uri.path().trim_start_matches('/');
+    let path = if path.is_empty() { "index.html" } else { path };
+    let immutable = path.starts_with("assets/");
+    let (name, gzipped, file) = if let Some(file) = Front::get(path) {
+        (path, false, file)
+    } else if let Some(file) = Front::get(&format!("{path}.gz")) {
+        // O compilador vem comprimido no site; aqui quem abre é o próprio navegador.
+        (path, true, file)
+    } else if immutable {
+        return StatusCode::NOT_FOUND.into_response();
+    } else if let Some(file) = Front::get("index.html") {
+        ("index.html", false, file)
+    } else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let mut response = Response::builder()
+        .header(header::CONTENT_TYPE, content_type(name))
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+        .header(header::REFERRER_POLICY, "no-referrer")
+        .header(header::X_FRAME_OPTIONS, "DENY")
+        .header(header::CACHE_CONTROL, if immutable { "public, max-age=31536000, immutable" } else { "no-cache" });
+    if gzipped {
+        response = response.header(header::CONTENT_ENCODING, "gzip");
+    }
+    response.body(Body::from(file.data)).unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+fn tls_config(cert: Vec<u8>, key: Vec<u8>) -> Result<ServerConfig, String> {
+    let mut config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(vec![CertificateDer::from(cert)], PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key)))
+        .map_err(|error| error.to_string())?;
+    config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    Ok(config)
+}
+
+// Guardado em disco: com um certificado novo a cada abertura, reabrir o programa no meio
+// da prova faria todo aluno aceitar o aviso de novo.
+fn tls_acceptor() -> Result<TlsAcceptor, String> {
+    let dir = dirs::data_local_dir().unwrap_or_else(std::env::temp_dir).join("Oblita");
+    let (cert_path, key_path) = (dir.join("cert.der"), dir.join("key.der"));
+    let saved = match (fs::read(&cert_path), fs::read(&key_path)) {
+        (Ok(cert), Ok(key)) => tls_config(cert, key).ok(),
+        _ => None,
+    };
+    let config = match saved {
+        Some(config) => config,
+        None => {
+            let mut names = vec!["localhost".to_string(), "127.0.0.1".to_string()];
+            names.extend(lan_addresses().into_iter().map(|(_, ip)| ip.to_string()));
+            let made = rcgen::generate_simple_self_signed(names).map_err(|error| error.to_string())?;
+            let (cert, key) = (made.cert.der().to_vec(), made.signing_key.serialize_der());
+            // Sem conseguir guardar, ainda funciona: só pede o aviso de novo na próxima abertura.
+            let _ = fs::create_dir_all(&dir).and_then(|()| fs::write(&cert_path, &cert)).and_then(|()| fs::write(&key_path, &key));
+            tls_config(cert, key)?
+        }
+    };
+    Ok(TlsAcceptor::from(Arc::new(config)))
+}
+
+// Em http://IP o navegador não libera a tela nem a cifra: fora do próprio computador, só https.
+fn redirect_to_tls(headers: &HeaderMap, uri: &Uri) -> Response {
+    let host = headers.get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or("localhost");
+    let host = host.split(':').next().unwrap_or("localhost");
+    let target = uri.path_and_query().map_or("/", |value| value.as_str());
+    Response::builder()
+        .status(StatusCode::PERMANENT_REDIRECT)
+        .header(header::LOCATION, format!("https://{host}:{FRONT_PORT}{target}"))
+        .body(Body::empty())
+        .unwrap_or_else(|_| StatusCode::BAD_REQUEST.into_response())
+}
+
+async fn serve_connection<I>(io: I, app: Router, peer: SocketAddr, tls: bool)
+where
+    I: hyper::rt::Read + hyper::rt::Write + Unpin + Send + 'static,
+{
+    let service = hyper::service::service_fn(move |mut request: hyper::Request<hyper::body::Incoming>| {
+        let app = app.clone();
+        async move {
+            if !tls && !is_loopback(peer.ip()) {
+                return Ok::<_, Infallible>(redirect_to_tls(request.headers(), request.uri()));
+            }
+            request.extensions_mut().insert(ConnectInfo(peer));
+            app.oneshot(request).await
+        }
+    });
+    let mut builder = hyper::server::conn::http1::Builder::new();
+    builder.timer(TokioTimer::new());
+    let _ = builder.serve_connection(io, service).with_upgrades().await;
+}
+
+async fn accept_front(stream: TcpStream, app: Router, peer: SocketAddr, acceptor: Option<TlsAcceptor>) {
+    let _ = stream.set_nodelay(true);
+    let mut first = [0u8; 1];
+    if !matches!(timeout(FIRST_BYTE_LIMIT, stream.peek(&mut first)).await, Ok(Ok(1))) {
+        return;
+    }
+    match (first[0] == TLS_HANDSHAKE, acceptor) {
+        (true, Some(acceptor)) => {
+            if let Ok(Ok(secure)) = timeout(FIRST_BYTE_LIMIT, acceptor.accept(stream)).await {
+                serve_connection(TokioIo::new(secure), app, peer, true).await;
+            }
+        }
+        (true, None) => {}
+        (false, _) => serve_connection(TokioIo::new(stream), app, peer, false).await,
+    }
+}
+
+// O hub continua de pé mesmo se esta parte falhar: quem usa o site baixado não depende dela.
+async fn serve_front(app: Router) {
+    if Front::get("index.html").is_none() {
+        log!("Este programa foi compilado sem o site: a porta {FRONT_PORT} fica fechada.");
+        return;
+    }
+    let address = SocketAddr::from((Ipv4Addr::UNSPECIFIED, FRONT_PORT));
+    let listener = match TcpListener::bind(address).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            log!("O site embutido não abriu na porta {FRONT_PORT} ({error}). O restante continua funcionando pelo oblita.giuli.dev.");
+            return;
+        }
+    };
+    let acceptor = match tls_acceptor() {
+        Ok(acceptor) => Some(acceptor),
+        Err(error) => {
+            log!("Sem certificado ({error}): os alunos não vão conseguir usar o site desta porta, só a página já baixada.");
+            None
+        }
+    };
+    FRONT_UP.store(true, Ordering::Relaxed);
+    log!("Sem internet e sem baixar nada antes:");
+    log!("    Professor, neste computador: http://localhost:{FRONT_PORT}");
+    for (_, ip) in lan_addresses() {
+        log!("    Alunos: https://{ip}:{FRONT_PORT}");
+    }
+    log!("    O navegador do aluno avisa sobre o certificado: clique em Avançado e depois em Continuar.");
+    log!("");
+    loop {
+        match listener.accept().await {
+            Ok((stream, peer)) => {
+                tokio::spawn(accept_front(stream, app.clone(), peer, acceptor.clone()));
+            }
+            Err(_) => time::sleep(Duration::from_millis(100)).await,
+        }
+    }
+}
+
+fn hub_routes() -> Router<Arc<Hub>> {
+    Router::new()
+        .route("/ping", get(ping))
+        .route("/host-token", get(host_token))
+        .route("/ws/host", get(ws_host))
+        .route("/ws/student", get(ws_student))
+        .route("/ws/files", get(ws_files))
+}
+
 async fn serve(token: String, app: Arc<App>) -> Result<(), String> {
     let address = SocketAddr::from((Ipv4Addr::UNSPECIFIED, port()));
     let listener = TcpListener::bind(address).await.map_err(explain_bind)?.tap_io(|tcp| {
@@ -602,15 +822,13 @@ async fn serve(token: String, app: Arc<App>) -> Result<(), String> {
     tokio::task::spawn_blocking(ensure_firewall);
 
     let hub = Arc::new(Hub { token, inner: Mutex::new(Inner::default()), app });
-    let app: Router = Router::new()
-        .route("/ping", get(ping))
-        .route("/host-token", get(host_token))
-        .route("/ws/host", get(ws_host))
-        .route("/ws/student", get(ws_student))
-        .route("/ws/files", get(ws_files))
-        .fallback(|| async { StatusCode::NOT_FOUND })
-        .layer(middleware::from_fn(cors))
-        .with_state(hub);
+    // Com --porta é teste, com outro programa aberto: a porta do site fica com ele.
+    if port() == HUB_PORT {
+        // Sem CORS: aqui tudo é da mesma origem, e nenhum outro site precisa ler nada desta porta.
+        let front: Router = hub_routes().fallback(front_file).with_state(hub.clone());
+        tokio::spawn(serve_front(front));
+    }
+    let app: Router = hub_routes().fallback(|| async { StatusCode::NOT_FOUND }).layer(middleware::from_fn(cors)).with_state(hub);
     let service = app.into_make_service_with_connect_info::<SocketAddr>();
     axum::serve(listener, service).await.map_err(|error| format!("O servidor parou: {error}. Abra o programa de novo."))
 }
@@ -643,7 +861,7 @@ Sem opções, abre a tela com menu e grava na pasta escolhida da última vez
 
 Opções:
   --pasta <caminho>  grava nesta pasta só desta vez, sem mudar a escolha salva
-  --porta <número>   escuta nesta porta em vez da 7787 (para testes)
+  --porta <número>   escuta nesta porta em vez da 7787, sem o site na 3067 (para testes)
   --plain            sem a tela de menu: só o registro, linha a linha
   --help, -h         mostra esta ajuda
 ";

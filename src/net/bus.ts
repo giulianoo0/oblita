@@ -2,7 +2,7 @@
 import { HUB_PORT } from '../../shared/protocol'
 import { HubOp, decodeHub, encodeHub } from '../../shared/frames'
 import { DataPipe, RTC_CONFIG, signalUrl, waitIce } from './rtc'
-import { parseAddress, pingHub } from './link'
+import { hubUrls, parseAddress, pingHub, servedByHost } from './link'
 
 const MAX_RTC_PEERS = 512
 // O que a aba pode ter na fila para o programa. Acima disso o programa está travado ou lento,
@@ -29,7 +29,7 @@ export async function connectHubBus(address: string, token: string, opts: { maxB
   const parsed = parseAddress(address) ?? { host: 'localhost', port: HUB_PORT }
   await pingHub(parsed.host, parsed.port, 2500)
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws://${parsed.host}:${parsed.port}/ws/host?token=${encodeURIComponent(token)}`)
+    const ws = new WebSocket(`${hubUrls(parsed.host, parsed.port).ws}/ws/host?token=${encodeURIComponent(token)}`)
     ws.binaryType = 'arraybuffer'
     const bus: Bus = {
       kind: 'hub',
@@ -139,10 +139,11 @@ export function connectRtcBus(code: string): Promise<Bus> {
 }
 
 // O programa só entrega o token para uma página do Oblita na própria máquina do professor.
-export async function detectHub(): Promise<{ token: string; addresses: string[] } | null> {
+export async function detectHub(): Promise<{ token: string; addresses: string[]; site?: string[] } | null> {
   try {
     const init: RequestInit & { targetAddressSpace?: string } = { signal: AbortSignal.timeout(1500), cache: 'no-store', targetAddressSpace: 'loopback' }
-    const res = await fetch(`http://localhost:${HUB_PORT}/host-token`, init)
+    if (servedByHost()) delete init.targetAddressSpace
+    const res = await fetch(`${hubUrls('localhost', HUB_PORT).http}/host-token`, init)
     return res.ok ? await res.json() : null
   } catch {
     return null

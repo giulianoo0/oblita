@@ -3,8 +3,18 @@ import type { Flow, QuestionClocks } from './flow'
 
 // 2: quadro comprimido, prova por partes, teste com o executável do aluno.
 export const PROTOCOL_VERSION = 2
-export const HUB_ORIGINS = ['https://oblita.giuli.dev', 'http://localhost:5173', 'http://localhost:3000']
+export const HUB_ORIGINS = [
+  'https://oblita.giuli.dev',
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'http://localhost:3067',
+  'http://127.0.0.1:3067',
+  'https://localhost:3067',
+  'https://127.0.0.1:3067',
+]
 export const HUB_PORT = 7787
+// Onde o programa serve o próprio site, independente do oblita.giuli.dev.
+export const FRONT_PORT = 3067
 
 export type RoomMode = 'individual' | 'group'
 export type Phase = 'lobby' | 'running' | 'ended'
