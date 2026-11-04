@@ -11,6 +11,7 @@ import type { Exam } from '../../shared/exam'
 import ExamPage from '../../src/student/ExamPage'
 import { monaco } from '../../src/student/monaco'
 import { studentSession } from '../../src/student/session'
+import { sandboxChecks } from './sandbox'
 
 const params = new URLSearchParams(location.search)
 const id = params.get('id') ?? 'a'
@@ -83,6 +84,7 @@ const relative = (line: number, column: number) => {
 Object.assign(window, {
   __t: {
     session: s,
+    sandboxChecks,
     monaco,
     TEAM,
     OK,

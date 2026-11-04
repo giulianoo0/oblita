@@ -788,6 +788,18 @@ async function run() {
   const left = await t('a', `({ path: w.location.pathname, saved: t.session.saved, refused: t.session.refused })`)
   check('voltar ao início limpa a sessão', left.path === '/' && left.saved === null && left.refused === null, left)
 
+  // ---- sandbox onde o professor roda o programa do aluno
+  const sb = await t('b', 't.sandboxChecks()')
+  console.log('     sandbox:', JSON.stringify({ doc: sb.doc, worker: sb.worker }))
+  const closed = (r) => Object.entries(r).filter(([k]) => k !== 'importScripts').every(([, v]) => String(v).startsWith('falhou'))
+  check('sandbox sem allow-same-origin', sb.doc.sandbox === 'allow-scripts', sb.doc.sandbox)
+  check('documento do sandbox: sem IndexedDB, caches, OPFS, seletor de arquivos, rede nem origem', closed(sb.doc.out) && Object.keys(sb.doc.out).length === 9, sb.doc.out)
+  check('worker do sandbox: sem IndexedDB, caches, OPFS, rede nem origem, e importScripts barrado', closed(sb.worker) && String(sb.worker.importScripts).startsWith('falhou'), sb.worker)
+  check('controle: fora do sandbox o IndexedDB abre', sb.control === 'abriu', sb.control)
+  check('o programa roda no sandbox', sb.soma.stdout === '42\n' && sb.soma.exitCode === 0, sb.soma)
+  check('no sandbox, nenhum arquivo da máquina abre e o programa termina', /passwd:falhou/.test(sb.disco.stdout) && /winini:falhou/.test(sb.disco.stdout) && /raiz:falhou/.test(sb.disco.stdout) && /escrita:falhou/.test(sb.disco.stdout) && /fim/.test(sb.disco.stdout) && !/ABRIU/.test(sb.disco.stdout) && sb.disco.exitCode === 0, sb.disco)
+  check('laço infinito no sandbox para no limite de tempo', sb.loop.timedOut === true, sb.loop)
+
   check('nenhum erro na página', pageErrors.length === 0, pageErrors)
   console.log(`\n${passed} ok, ${failed} falharam`)
   return failed === 0
