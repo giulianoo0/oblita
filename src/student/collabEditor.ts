@@ -3,7 +3,7 @@ import { MonacoBinding } from 'y-monaco'
 import type { Awareness } from 'y-protocols/awareness'
 import * as Y from 'yjs'
 import { mainFile } from '../../shared/exam'
-import { FILE_NAME } from '../../shared/protocol'
+import { MAX_PATH_CHARS, validPath } from '../../shared/protocol'
 import type { ExamDoc } from '../collab/examDoc'
 import { monaco, openModel } from './monaco'
 
@@ -50,7 +50,7 @@ function forgetWithDoc(doc: ExamDoc) {
 }
 
 const validId = (id: number) => Number.isSafeInteger(id) && id >= 0
-const shortString = (v: unknown) => (typeof v === 'string' && v.length <= 64 ? v : null)
+const shortString = (v: unknown) => (typeof v === 'string' && v.length <= MAX_PATH_CHARS ? v : null)
 const hueOf = (id: number) => (Math.imul(id, 2654435761) >>> 0) % 360
 
 function peerName(state: PeerState) {
@@ -77,6 +77,7 @@ export function peersOf(awareness: Awareness): Peer[] {
 }
 
 const stem = (file: string) => file.slice(0, file.lastIndexOf('.'))
+const base = (file: string) => file.slice(file.lastIndexOf('/') + 1)
 
 export class CollabEditor {
   private files = new Map<string, Map<string, FileEntry>>()
@@ -310,13 +311,17 @@ export class CollabEditor {
 
     const added: string[] = []
     map.forEach((value, name) => {
-      if (entries.has(name) || !(value instanceof Y.Text) || !FILE_NAME.test(name)) return
+      if (entries.has(name) || !(value instanceof Y.Text) || !validPath(name)) return
       entries.set(name, this.bindFile(questionId, name, value))
       added.push(name)
     })
 
     // Renomear é copiar e apagar na mesma transação: quem está no arquivo vai junto, com a mesma posição.
-    const renamedTo = (name: string) => added.find((a) => stem(a) === stem(name)) ?? (gone.length === 1 && added.length === 1 ? added[0] : null)
+    // Renomear pasta move vários de uma vez, e cada um mantém o nome.
+    const renamedTo = (name: string) => {
+      const sameName = added.filter((a) => base(a) === base(name))
+      return added.find((a) => stem(a) === stem(name)) ?? (sameName.length === 1 ? sameName[0] : gone.length === 1 && added.length === 1 ? added[0] : null)
+    }
     for (const [name, entry] of gone) {
       const target = renamedTo(name)
       const uri = entry.model.uri.toString()

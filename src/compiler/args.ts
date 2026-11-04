@@ -1,4 +1,5 @@
-import { RUN_LIMITS } from '../../shared/protocol'
+import type { Tree } from '@yowasp/clang'
+import { RUN_LIMITS, validPath } from '../../shared/protocol'
 
 // Este build do compilador não tem exceções de C++. Com estes símbolos, código com try/catch
 // compila normalmente, e só um throw executado de verdade encerra o programa, com mensagem clara.
@@ -11,10 +12,28 @@ __attribute__((weak)) void __cxa_throw(void*, void*, void (*)(void*)) { fputs("e
 }
 `
 
+// A árvore do clang é aninhada: "lib/util.h" vira a pasta lib com util.h dentro. Sem protótipo,
+// uma pasta chamada "__proto__" é só mais uma pasta.
+const folder = () => Object.create(null) as Tree
+
+function nest(files: Record<string, string>) {
+  const tree = folder()
+  for (const [path, content] of Object.entries(files)) {
+    const parts = path.split('/')
+    const name = parts.pop()!
+    let dir = tree
+    for (const part of parts) dir = (Object.hasOwn(dir, part) ? dir[part] : (dir[part] = folder())) as Tree
+    dir[name] = content
+  }
+  return tree
+}
+
 // O clang só enxerga esta árvore virtual: os arquivos da resposta e os headers do próprio
-// toolchain. Nenhum caminho vem do aluno além dos nomes, que já passaram por validFiles.
-export function compilerJob(lang: 'c' | 'cpp', files: Record<string, string>) {
-  const tree: Record<string, string> = { ...files }
+// toolchain. Nenhum caminho vem do aluno além dos nomes, e um nome fora de validPath (o documento
+// do colega pode ter qualquer chave) fica de fora em vez de virar pasta.
+export function compilerJob(lang: 'c' | 'cpp', all: Record<string, string>) {
+  const files = Object.fromEntries(Object.entries(all).filter(([name]) => validPath(name)))
+  const tree = nest(files)
   const inputs = Object.keys(files).filter((n) => (lang === 'c' ? n.endsWith('.c') : /\.(c|cc|cpp)$/.test(n)))
   if (lang === 'cpp') {
     let runtime = 'oblita_rt.cpp'

@@ -4,16 +4,24 @@ import { existsSync } from 'node:fs'
 import { commands } from '@yowasp/clang'
 import { validFiles } from '../../shared/protocol'
 import { compilerJob } from './args'
+import { execute } from './wasi'
+import type { RunResponse } from './run.worker'
 
 async function build(lang: 'c' | 'cpp', files: Record<string, string>) {
   const { tree, args } = compilerJob(lang, files)
   let log = ''
   try {
     const out = (await commands[lang === 'c' ? 'clang' : 'clang++'](args, tree, { stdout: null, stderr: (b) => b && (log += new TextDecoder().decode(b)) })) as Record<string, Uint8Array>
-    return { ok: !!out['main.wasm'], log }
+    return { ok: !!out['main.wasm'], log, wasm: out['main.wasm'] as Uint8Array<ArrayBuffer> | undefined }
   } catch {
     return { ok: false, log }
   }
+}
+
+async function stdout(wasm: Uint8Array<ArrayBuffer>) {
+  const out: RunResponse[] = []
+  await execute(wasm, '', (m) => out.push(m))
+  return out.map((m) => (m.type === 'out' && m.stream === 'stdout' ? m.text : '')).join('')
 }
 
 const SECRET = existsSync('/etc/passwd') ? '/etc/passwd' : 'C:/Windows/win.ini'
@@ -48,8 +56,40 @@ describe('o compilador só enxerga os arquivos da resposta', () => {
     expect(r.ok).toBe(true)
   }, 60_000)
 
-  test('nomes de arquivo não aceitam pasta nem subir pasta', () => {
-    for (const name of ['../x.c', '/etc/x.c', 'a/b.c', 'a\\b.c', '..', '.c', 'C:x.c', 'x.c\0', 'x.txt']) expect(validFiles({ [name]: '' })).toBe(false)
-    expect(validFiles({ 'main.c': '', 'util.h': '' })).toBe(true)
+  test('projeto com subpasta compila, linka e roda', async () => {
+    for (const lang of ['c', 'cpp'] as const) {
+      const ext = lang === 'c' ? 'c' : 'cpp'
+      const r = await build(lang, {
+        [`main.${ext}`]: '#include <stdio.h>\n#include "lib/util.h"\nint main(void) { printf("%d\\n", dobro(21)); return 0; }\n',
+        'lib/util.h': '#pragma once\nint dobro(int x);\n',
+        [`lib/util.${ext}`]: '#include "util.h"\nint dobro(int x) { return 2 * x; }\n',
+      })
+      expect(r.log).toBe('')
+      expect(await stdout(r.wasm!)).toBe('42\n')
+    }
+  }, 120_000)
+
+  test('include subindo pastas a partir de subpasta não sai da árvore virtual', async () => {
+    const r = await build('c', { 'main.c': 'int main(void) { return 0; }\n', 'lib/x.c': '#include "../../../../etc/passwd"\n' })
+    expect(r.ok).toBe(false)
+    expect(r.log).toMatch(/not found/)
+    expect(r.log).not.toMatch(/root:/)
+  }, 60_000)
+
+  test('caminho inválido vindo do documento não entra na árvore', () => {
+    const { tree, args } = compilerJob('c', { 'main.c': 'int main(void) { return 0; }\n', '../fora.c': 'x', '__proto__/x.c': 'y', 'a//b.c': 'z' })
+    expect(Object.keys(tree).sort()).toEqual(['__proto__', 'main.c'])
+    expect(args.filter((a) => a.endsWith('.c'))).toEqual(['main.c', '__proto__/x.c'])
+  })
+
+  test('caminhos aceitam subpasta, e nunca sair da árvore', () => {
+    expect(validFiles({ 'main.c': '', 'lib/util.h': '', 'lib/io/ler.c': '' })).toBe(true)
+    for (const name of ['../x.c', '/etc/x.c', 'a//b.c', 'a/./b.c', 'a/../b.c', './a.c', 'a/b.c/', 'a\\b.c', '..', '.c', 'C:x.c', 'C:/x.c', 'x.c\0', 'x.txt', 'lib/x.txt', 'con/x.c', 'lib/aux.h', 'lib./x.c', '.git/x.c', 'a/b/c/d/x.c', `${'a'.repeat(48)}/${'b'.repeat(48)}/${'c'.repeat(30)}.c`])
+      expect(validFiles({ [name]: '' })).toBe(false)
+  })
+
+  test('arquivo e pasta com o mesmo nome não convivem', () => {
+    expect(validFiles({ 'a.c': '', 'a.c/x.h': '' })).toBe(false)
+    expect(validFiles({ 'Lib/x.h': '', 'lib/y.h': '' })).toBe(true)
   })
 })

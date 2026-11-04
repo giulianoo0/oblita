@@ -84,4 +84,29 @@ describe('estrutura', () => {
     // A prova não muda depois de criada: o disco a grava uma vez só, pela identidade do objeto.
     expect(prova && 'stamp' in prova && prova.stamp).toBe(exam)
   })
+
+  test('arquivos de código saem com as subpastas', () => {
+    const ana = student('aaaa', 'Ana')
+    const room = fakeRoom([ana])
+    const files = { 'main.cpp': 'm', 'lib/util.h': 'u', 'lib/io/ler.cpp': 'l', 'Lib/b.h': 'b', 'LIB/util.h': 'U' }
+    room.teamOf(ana).answers.q1 = { answer: { type: 'code', lang: 'cpp', files }, rev: 1 }
+    const out = new Map(roomLayout(room).flat().flatMap((e) => ('text' in e ? [[e.path, e.text()] as const] : [])))
+    expect(out.get('alunos/Ana/q1/main.cpp')).toBe('m')
+    expect(out.get('alunos/Ana/q1/lib/util.h')).toBe('u')
+    expect(out.get('alunos/Ana/q1/lib/io/ler.cpp')).toBe('l')
+    // No Windows Lib e lib são a mesma pasta: tudo cai numa só, sem um arquivo cobrir o outro.
+    expect(out.get('alunos/Ana/q1/lib/b.h')).toBe('b')
+    expect(out.get('alunos/Ana/q1/lib/util (2).h')).toBe('U')
+  })
+
+  test('cada nome do caminho passa pelo sanitizador, e pasta não cobre a nota', () => {
+    const ana = student('aaaa', 'Ana')
+    const room = fakeRoom([ana])
+    const files = { '../../fora.c': 'a', 'con/aux.h': 'b', 'nota.txt/x.c': 'c', 'a//b.c': 'd' }
+    room.teamOf(ana).answers.q1 = { answer: { type: 'code', lang: 'cpp', files }, rev: 1 }
+    const out = new Map(roomLayout(room).flat().flatMap((e) => ('text' in e ? [[e.path, e.text()] as const] : [])))
+    const q1 = [...out.keys()].filter((p) => p.startsWith('alunos/Ana/q1/')).sort()
+    expect(q1).toEqual(['alunos/Ana/q1/_/_/fora.c', 'alunos/Ana/q1/_con/_aux.h', 'alunos/Ana/q1/a/_/b.c', 'alunos/Ana/q1/nota (2).txt/x.c', 'alunos/Ana/q1/nota.txt'])
+    expect(out.get('alunos/Ana/q1/nota.txt')).toBe('sem nota\n')
+  })
 })

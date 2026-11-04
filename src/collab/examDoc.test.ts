@@ -76,6 +76,49 @@ describe('ExamDoc', () => {
     expect(Object.keys(b.snapshot(Q)!.files)).toEqual(['main.cpp'])
   })
 
+  test('pasta vazia criada por um aparece no outro', () => {
+    const { a, b, sync } = team()
+    a.addFolder(Q, 'lib')
+    a.addFolder(Q, 'lib/io')
+    sync()
+    expect(b.folders(Q)).toEqual(['lib', 'lib/io'])
+  })
+
+  test('renomear pasta leva os arquivos e subpastas, com o texto', () => {
+    const { a, b, sync } = team()
+    a.addFolder(Q, 'lib/vazia')
+    a.addFile(Q, 'lib/util.h', '#pragma once\n')
+    a.addFile(Q, 'lib/io/ler.cpp', 'ler')
+    a.addFile(Q, 'libx.cpp', 'fora')
+    sync()
+    b.renameFolder(Q, 'lib', 'src')
+    sync()
+    expect(a.snapshot(Q)?.files).toEqual({ 'main.cpp': 'int main() {}\n', 'src/util.h': '#pragma once\n', 'src/io/ler.cpp': 'ler', 'libx.cpp': 'fora' })
+    expect(a.folders(Q)).toEqual(['src/vazia'])
+  })
+
+  test('apagar pasta apaga o que está dentro, e só isso', () => {
+    const { a, b, sync } = team()
+    a.addFolder(Q, 'lib/vazia')
+    a.addFile(Q, 'lib/util.h', 'x')
+    a.addFile(Q, 'lib/io/ler.cpp', 'y')
+    a.addFile(Q, 'lib2/z.h', 'z')
+    sync()
+    b.removeFolder(Q, 'lib')
+    sync()
+    expect(Object.keys(a.snapshot(Q)!.files).sort()).toEqual(['lib2/z.h', 'main.cpp'])
+    expect(a.folders(Q)).toEqual([])
+  })
+
+  test('pasta com nome inválido no mapa é ignorada', () => {
+    const d = new ExamDoc()
+    d.seed(Q, 'cpp', 'main.cpp', 'ok')
+    d.addFolder(Q, 'ok')
+    ;(d.doc.getMap(`dirs:${Q}`) as Y.Map<unknown>).set('../fora', true)
+    ;(d.doc.getMap(`dirs:${Q}`) as Y.Map<unknown>).set('a//b', true)
+    expect(d.folders(Q)).toEqual(['ok'])
+  })
+
   test('entrada adulterada no mapa é ignorada, sem derrubar nada', () => {
     const d = new ExamDoc()
     d.seed(Q, 'cpp', 'main.cpp', 'ok')
