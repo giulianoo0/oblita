@@ -31,6 +31,7 @@ import {
   type TeamInfo,
 } from '../../shared/protocol'
 import { RateLimiter, isAllowed } from '../../shared/policy'
+import { hashFiles, checksumOf, issueReceipt, openReceipt, parseBody, parseReceiptBlock, type Receipt, type ReceiptBody } from '../../shared/receipt'
 import { SecureChannel, deriveRoomKey, fingerprint, helloTranscript, newTeacherIdentity, signHello, verifyTokenProof, type TeacherIdentity, fromB64, newEphemeral, randomBytes, sha256Hex, toB64, type Ephemeral } from '../../shared/secure'
 import { idb, requestPersistence } from '../lib/idb'
 import { Observable, randomId } from '../lib/store'
@@ -190,6 +191,8 @@ export interface Student {
   alerts: number
   lastAlert?: AlertEntry
   finishedAt?: number
+  // Todos os comprovantes emitidos, o mais novo por último. Vários só em equipe, se o código mudou depois.
+  receipts?: Receipt[]
   lastEvent: number
   lastRec: number
   lastHash?: string
@@ -219,6 +222,10 @@ interface Snapshot {
   via?: { kind: 'hub' } | { kind: 'rtc' }
 }
 
+export type ReceiptCheck =
+  | { status: 'unknown' | 'forged' | 'other-room' }
+  | { status: 'found'; body: ReceiptBody; student: Student; current: boolean; matchesNow: boolean }
+
 const noStatus = (): StudentStatus => ({ screen: false, fullscreen: false, focused: false, isolated: null, extended: false })
 
 export class Room extends Observable {
@@ -237,6 +244,7 @@ export class Room extends Observable {
 
   bus: Bus | null = null
   busState: 'none' | 'connecting' | 'hub' | 'rtc' | 'down' = 'none'
+  private receiptJobs = new Map<string, Promise<void>>()
   hubAddresses: string[] = []
   // Onde os alunos abrem o site servido pelo programa. Vazio se esta versão do programa não serve.
   hubSite: string[] = []
@@ -724,6 +732,7 @@ export class Room extends Observable {
         if (this.accept(s, msg.seq)) {
           s.finishedAt = Date.now()
           this.touch()
+          this.deliverReceipt(s)
         }
         break
       case 'team-create':
@@ -866,6 +875,7 @@ export class Room extends Observable {
       drafts: this.phase === 'lobby' ? undefined : nonCodeAnswers(team),
     })
     this.broadcastGroup(s.groupId)
+    if (s.examGranted && (s.finishedAt || team.closed)) this.deliverReceipt(s)
     if (this.focused === s.clientId) this.sendTo(peer, { t: 'focus', on: true })
     this.maybeSendExam(s)
     this.touch()
@@ -1054,8 +1064,77 @@ export class Room extends Observable {
       }
     }
     for (const s of this.students.values()) {
-      if (this.teamKey(s) === team.key) this.sendToStudent(s, { t: 'phase', phase: 'ended' })
+      if (this.teamKey(s) !== team.key) continue
+      this.sendToStudent(s, { t: 'phase', phase: 'ended' })
+      if (s.examGranted) this.deliverReceipt(s)
     }
+  }
+
+  // ---- comprovante de entrega
+
+  // O mesmo que a exportação grava: a entrega, e na falta dela o rascunho.
+  private deliveredAnswers(team: Team) {
+    const out: Record<string, Answer | undefined> = {}
+    for (const q of this.exam.questions) out[q.id] = team.submissions[q.id]?.answer ?? team.answers[q.id]?.answer
+    return out
+  }
+
+  // Idempotente: com o conteúdo igual reenvia o comprovante que já existe, com o mesmo ID. Roda ao
+  // entregar, ao encerrar e ao reconectar, então nenhum aluno fica sem, mesmo offline na hora.
+  private deliverReceipt(s: Student) {
+    const team = this.teamOf(s)
+    try {
+      this.extractAnswers(team)
+    } catch (err) {
+      console.error('falha ao extrair respostas', team.key, err)
+    }
+    const answers = this.deliveredAnswers(team)
+    const teamName = s.groupId ? this.config.groups.find((g) => g.id === s.groupId)?.name : undefined
+    const job = (this.receiptJobs.get(s.clientId) ?? Promise.resolve()).then(async () => {
+      // Os alertas que chegaram antes da entrega terminam de entrar na cadeia antes de ela ser citada.
+      await this.eventChains.get(s.clientId)
+      const files = await hashFiles(answers)
+      const checksum = await checksumOf(files)
+      const last = s.receipts?.at(-1)
+      if (last && parseBody(last).checksum === checksum) return this.sendToStudent(s, { t: 'receipt', receipt: last })
+      const receipt = await issueReceipt(this.identity, {
+        roomId: this.config.roomId,
+        title: this.config.title,
+        name: s.name,
+        enrollment: s.enrollment,
+        team: teamName,
+        at: Date.now(),
+        files,
+        events: s.lastHash,
+      })
+      s.receipts = [...(s.receipts ?? []), receipt]
+      this.touch()
+      this.sendToStudent(s, { t: 'receipt', receipt })
+    })
+    this.receiptJobs.set(s.clientId, job.catch((err) => console.error('falha ao emitir comprovante', s.clientId, err)))
+  }
+
+  async checkReceipt(query: string): Promise<ReceiptCheck> {
+    const pasted = parseReceiptBlock(query)
+    if (pasted) {
+      const opened = await openReceipt(pasted)
+      if (!opened) return { status: 'forged' }
+      if (opened.fp !== this.fingerprint) return { status: 'other-room' }
+    }
+    const text = query.trim()
+    const wanted = pasted ? parseBody(pasted).id : text.toUpperCase()
+    const hash = text.toLowerCase()
+    for (const student of this.students.values()) {
+      const receipts = student.receipts ?? []
+      for (const [i, receipt] of receipts.entries()) {
+        const body = parseBody(receipt)
+        if (body.id !== wanted && body.checksum !== hash) continue
+        if (!(await openReceipt(receipt))) return { status: 'forged' }
+        const now = await checksumOf(await hashFiles(this.deliveredAnswers(this.teamOf(student))))
+        return { status: 'found', body, student, current: i === receipts.length - 1, matchesNow: now === body.checksum }
+      }
+    }
+    return { status: 'unknown' }
   }
 
   private onEvent(s: Student, event: ProctorEvent) {

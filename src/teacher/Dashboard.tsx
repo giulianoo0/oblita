@@ -11,6 +11,7 @@ import { BuildVersion } from '../ui/BuildVersion'
 import { Avatar, Logo, Modal, Pill, Popover, PopoverRow, Segmented, Switch, useTick } from '../ui/kit'
 import { alertLabel, canStreamToDisk, download, exportRoomZip, safeName } from './exportZip'
 import { openRoom, type AlertEntry, type Room, type Student } from './room'
+import { ReceiptCheck } from './ReceiptCheck'
 import { keepConnected } from './reconnect'
 import { buildRows, EMPTY_QUERY, filterRows, isFiltering, type RosterQuery } from './roster'
 import { Marked, NoMatch, ResultsTable, RosterBar, studentPath, useRosterState, Waiting } from './RosterView'
@@ -275,6 +276,7 @@ function DashboardView({ room }: { room: Room }) {
   const view = room.phase === 'lobby' ? 'wall' : (roster.view ?? (room.phase === 'ended' ? 'results' : 'wall'))
   const [confirmEnd, setConfirmEnd] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [checking, setChecking] = useState(false)
 
   // A busca chega aqui em transição, e o texto só depois de uma pausa: com 100 miniaturas, refazer a
   // parede a cada letra pesa mais que esperar o professor parar de digitar.
@@ -331,8 +333,10 @@ function DashboardView({ room }: { room: Room }) {
             Encerrar
           </Pill>
         )}
+        <Pill onClick={() => setChecking(true)}>Conferir</Pill>
         <Pill onClick={() => setExporting(true)}>Exportar</Pill>
       </header>
+      <ReceiptCheck room={room} open={checking} onClose={() => setChecking(false)} />
 
       <div className="dash-body">
         <main className="dash-main">

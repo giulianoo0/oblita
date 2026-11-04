@@ -314,13 +314,26 @@ Decisão do dono, substituindo os grupos definidos pelo professor e a trava por 
 
 ```
 <título>.zip  ou  <pasta escolhida>/<título> <data>/
-  resumo.csv, prova.json
+  resumo.csv, comprovantes.csv, prova.json
   alunos/<nome (matrícula)>/
-    resumo.txt, alertas.csv, gravacao/0000.mp4
+    resumo.txt, alertas.csv, comprovante.txt, gravacao/0000.mp4
     q1/main.cpp, q1/lib/util.h, q1/nota.txt   (subpastas do aluno, cada nome pelo safeName)
   grupos/<grupo>/
-    resumo.txt, q1/..., <integrante (matrícula)>/alertas.csv, .../gravacao/
+    resumo.txt, q1/..., <integrante (matrícula)>/alertas.csv, .../comprovante.txt, .../gravacao/
 ```
+
+### Comprovante de entrega
+
+`shared/receipt.ts`. Ao entregar, o aluno recebe um **ID da entrega** e um **checksum**, assinados pelo professor. É a prova de que aquele conteúdo chegou, e qualquer um dos dois lados pode conferir.
+
+- **Checksum:** para cada arquivo de resposta, o SHA-256 do conteúdo, numa lista no formato do `sha256sum` (`<hash>  q1/main.c`), em ordem de caminho. O checksum é o SHA-256 dessa lista. Texto e múltipla escolha viram `resposta.txt`, com o mesmo conteúdo que a exportação grava, então os arquivos exportados conferem sem o Oblita. Sem resposta, a lista é vazia.
+- **ID:** 12 caracteres aleatórios, um para cada comprovante.
+- **Assinatura:** ECDSA P-256 com a chave da sala, a mesma do aperto de mão, com prefixo próprio para uma assinatura não servir no lugar da outra. O aluno confere a assinatura e se a chave é a do código do professor que ele já conhece.
+- **Quem calcula:** o professor, a partir do que recebeu, porque o comprovante atesta o recebimento. O aluno compara com o que está na tela dele, por questão, e é avisado se diferir. Em equipe não compara, porque os colegas podem ter editado.
+- **Quando:** ao entregar, ao encerrar a prova ou a equipe, e ao reconectar. Quem estava offline recebe ao voltar. Com o conteúdo igual, reenvia o mesmo comprovante, com o mesmo ID. Em equipe, se o código mudar depois de um integrante entregar, sai um novo, e o antigo fica no histórico como substituído.
+- **Conferir:** o botão Conferir do painel aceita ID, checksum ou o texto do arquivo baixado, e diz de quem é, se é o mais novo e se ainda bate com o que está guardado. O texto com assinatura de outra chave ou alterado é recusado.
+- **Na exportação:** `comprovantes.csv` na raiz, com todos, e `comprovante.txt` na pasta de cada aluno.
+- **O que não cobre:** a gravação, que continua chegando depois da entrega. O comprovante cita o último elo da cadeia de eventos, mas não os vídeos.
 
 ## 15. Offline
 

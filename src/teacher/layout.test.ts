@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'bun:test'
+import { createHash } from 'node:crypto'
+import { hashFiles, issueReceipt, parseBody } from '../../shared/receipt'
+import { newTeacherIdentity } from '../../shared/secure'
 import { roomFolder, roomLayout, type LayoutRoom } from './layout'
 import type { Student, Team } from './room'
 
@@ -48,9 +51,54 @@ function fakeRoom(students: Student[]): LayoutRoom {
     },
     scoreOf: () => ({ earned: 0, total: 8, pending: 0 }),
     resultsCsv: () => 'nome',
+    fingerprint: 'H8A-NRA',
   }
   return room
 }
+
+describe('comprovante na exportação', () => {
+  const sha = (text: string) => createHash('sha256').update(text, 'utf8').digest('hex')
+  const answers = {
+    q1: { type: 'code', lang: 'c', files: { 'main.c': 'int main(){}\n', 'lib/util.h': '#pragma once\n' } },
+    q2: { type: 'text', text: 'ação\n' },
+  } as const
+
+  async function exported() {
+    const receipt = await issueReceipt(await newTeacherIdentity(), { roomId: 'r', title: 'Prova', name: 'Ana', at: 1000, files: await hashFiles(answers) })
+    const ana = student('aaaa', 'Ana', { receipts: [receipt] })
+    const room = fakeRoom([ana])
+    const team = room.teamOf(ana)
+    team.submissions.q1 = { answer: answers.q1 as never, at: 1000, by: 'Ana' }
+    team.submissions.q2 = { answer: answers.q2, at: 1000, by: 'Ana' }
+    const files = new Map(roomLayout(room).flat().flatMap((e) => ('text' in e ? [[e.path, e.text()] as const] : [])))
+    return { receipt: parseBody(receipt), files }
+  }
+
+  test('cada arquivo exportado confere com o sha256 do comprovante', async () => {
+    const { receipt, files } = await exported()
+    expect(receipt.files.length).toBe(3)
+    for (const [path, hash] of receipt.files) expect(sha(files.get(`alunos/Ana/${path}`)!)).toBe(hash)
+  })
+
+  test('o texto do comprovante e o índice saem junto', async () => {
+    const { receipt, files } = await exported()
+    const text = files.get('alunos/Ana/comprovante.txt')!
+    expect(text).toContain(receipt.id)
+    expect(text).toContain(receipt.checksum)
+    expect(text).toContain('H8A-NRA')
+    expect(sha(receipt.files.map(([path, hash]) => `${hash}  ${path}\n`).join(''))).toBe(receipt.checksum)
+    const csv = files.get('comprovantes.csv')!
+    expect(csv).toContain(receipt.id)
+    expect(csv).toContain(receipt.checksum)
+    expect(csv).toContain('sim')
+  })
+
+  test('sem comprovante, a pasta não ganha o arquivo', () => {
+    const room = fakeRoom([student('aaaa', 'Ana')])
+    const paths = roomLayout(room).flat().map((e) => e.path)
+    expect(paths.some((path) => path.endsWith('comprovante.txt'))).toBe(false)
+  })
+})
 
 describe('pasta da sala', () => {
   test('título e data, com nome seguro', () => {

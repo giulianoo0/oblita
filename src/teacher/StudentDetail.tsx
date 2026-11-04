@@ -4,6 +4,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import type { Question, Solution } from '../../shared/exam'
 import type { Answer } from '../../shared/protocol'
+import { parseBody } from '../../shared/receipt'
 import { formatClock, useObservable } from '../lib/store'
 import { Avatar, Logo, Pill, Segmented, useTick } from '../ui/kit'
 import { MemberChips, RoomGate, RoomMissing, hhmmss, useRoom, useRoomRuntime } from './Dashboard'
@@ -153,6 +154,8 @@ function Identity({ room, student: s }: { room: Room; student: Student }) {
   const group = inTeams ? room.config.groups.find((g) => g.id === s.groupId) : undefined
   const members = group ? [...room.students.values()].filter((m) => m.groupId === group.id).sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')) : []
   const st = s.status
+  const lastReceipt = s.receipts?.at(-1)
+  const receipt = lastReceipt ? parseBody(lastReceipt) : null
   const flags: [string, boolean][] = [
     ['Tela', st.screen],
     ['Tela cheia', st.fullscreen],
@@ -189,6 +192,11 @@ function Identity({ room, student: s }: { room: Room; student: Student }) {
         {s.finishedAt && (
           <span className="badge">
             <Check size={12} /> Entregou {hhmmss(s.finishedAt)}
+          </span>
+        )}
+        {receipt && (
+          <span className="badge mono" title={`Comprovante de entrega. Checksum ${receipt.checksum}`}>
+            {receipt.id}
           </span>
         )}
         {s.chainBroken && (

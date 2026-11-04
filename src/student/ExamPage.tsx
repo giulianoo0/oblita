@@ -1,9 +1,10 @@
-import { ArrowRight, Check, Copy, HardDrive, Lock, LoaderCircle, Maximize, MonitorOff, MonitorUp, RefreshCw, Send, WifiOff, X } from 'lucide-react'
+import { ArrowRight, Check, Copy, Download, HardDrive, Lock, LoaderCircle, Maximize, MonitorOff, MonitorUp, RefreshCw, Send, WifiOff, X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import type { ChoiceQuestion, Question, TextQuestion } from '../../shared/exam'
+import { parseBody, receiptText } from '../../shared/receipt'
 import { switchBuild, versionFix, type VersionFix } from '../lib/offline'
 import { formatClock, useObservable } from '../lib/store'
 import { parseAddress, servedByHost, type ConnectError } from '../net/link'
@@ -1036,6 +1037,51 @@ function LockOverlay() {
   )
 }
 
+function DeliveryReceipt() {
+  const s = session
+  const receipt = s.saved?.receipt
+  const fp = s.teacherFp
+  if (s.receiptInvalid) return <div className="errbox" role="alert">O comprovante recebido não tem a assinatura do professor. Avise o professor.</div>
+  if (!receipt || !fp) {
+    return (
+      <p className="row muted" style={{ gap: '0.5rem' }}>
+        <LoaderCircle size={16} className="spin" /> Esperando o comprovante do professor…
+      </p>
+    )
+  }
+  const body = parseBody(receipt)
+  const differs = s.saved?.receiptDiff ?? []
+  const save = () => {
+    const url = URL.createObjectURL(new Blob([receiptText(receipt, fp)], { type: 'text/plain;charset=utf-8' }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `comprovante-${body.id}.txt`
+    a.click()
+    setTimeout(() => URL.revokeObjectURL(url), 30000)
+  }
+  return (
+    <div className="receipt" aria-label="Comprovante de entrega">
+      <span className="conn-label">ID da entrega</span>
+      <b className="receipt-id mono">{body.id}</b>
+      <span className="conn-label">Checksum (SHA-256)</span>
+      <span className="receipt-hash mono small">{body.checksum}</span>
+      <span className="small muted">
+        Recebido em {new Date(body.at).toLocaleString('pt-BR')}, assinado pelo código do professor <span className="mono">{fp}</span>.
+      </span>
+      {differs.length > 0 && (
+        <div className="errbox" role="alert">
+          O que o professor recebeu em {differs.join(', ')} é diferente do que está nesta tela. Avise o professor agora.
+        </div>
+      )}
+      {body.team && <span className="small muted">Se a equipe mudar algo até o fim da prova, um novo comprovante substitui este.</span>}
+      <Pill onClick={save}>
+        <Download size={16} /> Baixar comprovante
+      </Pill>
+      <span className="small muted">Baixe ou anote antes de sair: é a sua prova de que entregou.</span>
+    </div>
+  )
+}
+
 function DoneStep() {
   useTick(1000)
   const s = session
@@ -1063,6 +1109,7 @@ function DoneStep() {
         {canLeave ? (
           <>
             <h1>Prova entregue</h1>
+            <DeliveryReceipt />
             <Pill tone="primary" size="lg" onClick={() => void leave()}>
               Sair
             </Pill>
@@ -1071,6 +1118,7 @@ function DoneStep() {
           <>
             <h1 className="num">Enviando {pending}</h1>
             <p>Não feche esta página até chegar a zero.</p>
+            <DeliveryReceipt />
           </>
         )}
       </div>

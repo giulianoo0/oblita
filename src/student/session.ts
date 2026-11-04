@@ -2,6 +2,7 @@
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from 'y-protocols/awareness'
 import { decodeFrame, deflateFrame, encodeBinary, encodeJson, inflate, inflateFrame } from '../../shared/frames'
 import { isOpen, type QuestionClocks } from '../../shared/flow'
+import { hashFiles, manifestOf, openReceipt, type Receipt, type ReceiptBody } from '../../shared/receipt'
 import { SEALED_TAG, SecureChannel, deriveRoomKey, fingerprint, fromB64, helloTranscript, newEphemeral, sha256Hex, toB64, tokenProof, verifyHello } from '../../shared/secure'
 import type { Exam, Question } from '../../shared/exam'
 import {
@@ -69,6 +70,9 @@ interface Saved {
   segment: number
   lastHash: string
   finished?: boolean
+  receipt?: Receipt
+  // Questões em que o comprovante difere desta tela. Vazio em equipe: os colegas podem ter editado.
+  receiptDiff?: string[]
   active: boolean
 }
 
@@ -100,6 +104,7 @@ export class StudentSession extends Observable {
   teamError: string | null = null
   needsPassword = false
   teacherFp: string | null = null
+  receiptInvalid = false
   beaconCode: number | null = null
   countdownEnds = 0
   doc = new ExamDoc()
@@ -516,6 +521,8 @@ export class StudentSession extends Observable {
     s.config = undefined
     s.docState = undefined
     s.finished = undefined
+    s.receipt = undefined
+    s.receiptDiff = undefined
     s.answers = {}
     s.eventSeq = 0
     s.recSeq = 0
@@ -604,6 +611,9 @@ export class StudentSession extends Observable {
         break
       case 'ack':
         void this.onAck(msg.stream, msg.seq)
+        break
+      case 'receipt':
+        void this.onReceipt(msg.receipt)
         break
       case 'warn':
         this.warning = msg.text
@@ -1179,6 +1189,33 @@ export class StudentSession extends Observable {
     this.recorder = null
     if (document.fullscreenElement) await document.exitFullscreen().catch(() => {})
     this.changed()
+  }
+
+  // Antes de guardar, confere se foi mesmo o professor desta prova quem assinou.
+  private async onReceipt(receipt: Receipt) {
+    const s = this.saved
+    if (!s) return
+    const opened = await openReceipt(receipt)
+    if (!opened || opened.fp !== s.teacherFp) {
+      this.receiptInvalid = true
+      return this.changed()
+    }
+    this.receiptInvalid = false
+    s.receipt = receipt
+    s.receiptDiff = opened.body.team ? [] : await this.receiptDiff(opened.body)
+    void this.persist()
+    this.changed()
+  }
+
+  private async receiptDiff(body: ReceiptBody) {
+    const differs: string[] = []
+    for (const q of this.saved?.exam?.questions ?? []) {
+      const prefix = `${q.id}/`
+      const mine = await hashFiles({ [q.id]: this.answerOf(q.id) })
+      const theirs = body.files.filter(([path]) => path.startsWith(prefix))
+      if (manifestOf(mine) !== manifestOf(theirs)) differs.push(q.id)
+    }
+    return differs
   }
 
   pendingUploads() {

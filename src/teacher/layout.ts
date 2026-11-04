@@ -2,9 +2,10 @@
 // Todo nome que vem do aluno, da equipe ou da prova passa por safeName antes de virar caminho;
 // o programa do professor confere de novo do lado dele.
 import { ALERT_LABEL, type AlertKind } from '../../shared/protocol'
+import { answerFiles, parseBody, receiptText } from '../../shared/receipt'
 import type { AlertEntry, Grade, Room, SegmentInfo, Student, Team } from './room'
 
-export type LayoutRoom = Pick<Room, 'config' | 'exam' | 'students' | 'teams' | 'alerts' | 'teamOf' | 'scoreOf' | 'resultsCsv'>
+export type LayoutRoom = Pick<Room, 'config' | 'exam' | 'students' | 'teams' | 'alerts' | 'teamOf' | 'scoreOf' | 'resultsCsv' | 'fingerprint'>
 
 // `stamp` diz quando o texto não mudou sem precisar montá-lo: a prova pode ter 12 MB.
 export type LayoutEntry = { path: string; text: () => string; stamp?: unknown } | { path: string; segment: { clientId: string; info: SegmentInfo } }
@@ -113,14 +114,17 @@ function teamEntries(room: LayoutRoom, team: Team, dir: string, members: Student
     ...(teamName ? [`Equipe: ${oneLine(teamName)}`] : []),
     `Pontos: ${score.earned} de ${score.total}`,
     '',
-    ...members.map((s) => `${oneLine(label(s))}; alertas: ${s.alerts}; entregou: ${date(s.finishedAt) || 'não'}`),
+    ...members.map((s) => {
+      const receipt = s.receipts?.at(-1)
+      return `${oneLine(label(s))}; alertas: ${s.alerts}; entregou: ${date(s.finishedAt) || 'não'}${receipt ? `; comprovante: ${parseBody(receipt).id}` : ''}`
+    }),
     '',
     ...room.exam.questions.map((q) => `${q.id} ${oneLine(q.title)}: ${team.grades[q.id]?.points ?? 0}/${q.points}`),
   ]
   text(`${dir}/resumo.txt`, info.join('\n') + '\n')
 
   // Um aluno chamado "q1" ou "resumo.txt" não pode cair em cima da questão nem do resumo.
-  const names = new Set(['resumo.txt', 'alertas.csv', 'gravacao'])
+  const names = new Set(['resumo.txt', 'alertas.csv', 'gravacao', 'comprovante.txt'])
   for (const q of room.exam.questions) {
     const sub = team.submissions[q.id]
     const answer = sub?.answer ?? team.answers[q.id]?.answer
@@ -129,9 +133,10 @@ function teamEntries(room: LayoutRoom, team: Team, dir: string, members: Student
       const entries = Object.entries(answer.files)
       const paths = codePaths(entries.map(([name]) => name), new Set(['nota.txt']))
       entries.forEach(([, content], i) => text(`${base}/${paths[i]}`, content))
-    } else if (answer?.type === 'text') text(`${base}/resposta.txt`, answer.text)
-    else if (answer?.type === 'choice') text(`${base}/resposta.txt`, answer.selected.join(', ') + '\n')
-    else text(`${base}/sem-resposta.txt`, '')
+    } else if (answer) {
+      // O conteúdo é o mesmo que entra no comprovante: dá para conferir o arquivo com sha256sum.
+      for (const [name, content] of answerFiles(answer)) text(`${base}/${name}`, content)
+    } else text(`${base}/sem-resposta.txt`, '')
     text(`${base}/nota.txt`, gradeText(team.grades[q.id]) + '\n')
   }
 
@@ -140,6 +145,8 @@ function teamEntries(room: LayoutRoom, team: Team, dir: string, members: Student
     const alerts = [...(alertsOf.get(s.clientId) ?? [])].reverse()
     const rows = ['hora;evento;detalhe', ...alerts.map((a) => [date(a.at), alertLabel(a.kind), a.detail ?? ''].map(csvCell).join(';'))]
     text(`${who}/alertas.csv`, '\ufeff' + rows.join('\n') + '\n')
+    // O mais novo primeiro, como é o que vale.
+    if (s.receipts?.length) text(`${who}/comprovante.txt`, [...s.receipts].reverse().map((r) => receiptText(r, room.fingerprint)).join('\n'))
     // O número do segmento veio do aluno e vira nome de arquivo.
     const segments = Object.values(s.segments).filter((seg) => Number.isSafeInteger(seg.segment) && seg.segment >= 0)
     for (const seg of segments.sort((a, b) => a.segment - b.segment)) {
@@ -149,12 +156,26 @@ function teamEntries(room: LayoutRoom, team: Team, dir: string, members: Student
   return out
 }
 
+// Um por linha, inclusive os substituídos: é por aqui que o professor acha um ID que o aluno trouxer.
+function receiptsCsv(room: LayoutRoom) {
+  const rows = [['id', 'nome', 'matricula', 'equipe', 'recebido_em', 'checksum_sha256', 'vigente'].join(';')]
+  for (const s of room.students.values()) {
+    const receipts = s.receipts ?? []
+    receipts.forEach((receipt, i) => {
+      const body = parseBody(receipt)
+      rows.push([body.id, body.name, body.enrollment ?? '', body.team ?? '', date(body.at), body.checksum, i === receipts.length - 1 ? 'sim' : 'não'].map(csvCell).join(';'))
+    })
+  }
+  return '\ufeff' + rows.join('\n') + '\n'
+}
+
 // Um grupo de entradas por pessoa ou equipe, depois do primeiro com os arquivos da sala.
 // Só lê o que é público da sala: token, chave e códigos de equipe nunca passam por aqui.
 export function roomLayout(room: LayoutRoom): LayoutEntry[][] {
   const units: LayoutEntry[][] = [
     [
       { path: 'resumo.csv', text: () => '\ufeff' + room.resultsCsv() + '\n' },
+      { path: 'comprovantes.csv', text: () => receiptsCsv(room) },
       { path: 'prova.json', text: () => JSON.stringify(room.exam, null, 2), stamp: room.exam },
     ],
   ]

@@ -1118,6 +1118,33 @@ async function s9End() {
     }
   }, { timeout: 200_000 })
   await A.shot('33-entregue')
+  let receiptId = ''
+  await check('comprovante: ID e checksum na tela de cada aluno', async () => {
+    for (const t of [A, B, C]) {
+      await t.waitFor(`!!document.querySelector('.receipt-id')`, { timeout: 30000 })
+      const id = await t.ev(`document.querySelector('.receipt-id').textContent`)
+      const hash = await t.ev(`document.querySelector('.receipt .receipt-hash').textContent`)
+      assert(/^[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(id), id)
+      assert(/^[0-9a-f]{64}$/.test(hash), hash)
+      assert(!(await t.text()).includes('é diferente do que está nesta tela'), 'aviso falso de diferença')
+    }
+    receiptId = await A.ev(`document.querySelector('.receipt-id').textContent`)
+  }, { timeout: 100_000 })
+  await A.shot('33b-comprovante')
+  await check('Conferir acha o ID do aluno e recusa um inventado', async () => {
+    const dialog = `document.querySelector('.modal')`
+    await T.clickText('Conferir')
+    await T.waitFor(`!!${dialog}`)
+    await T.fill('ID, checksum ou texto do comprovante', receiptId)
+    await T.clickText('Conferir', { within: dialog })
+    await T.waitText('Bate com o que está guardado')
+    assert((await T.ev(`${dialog}.innerText`)).includes(NAME.a), 'nome do aluno no resultado')
+    await T.fill('ID, checksum ou texto do comprovante', 'AAAA-AAAA-AAAA')
+    await T.clickText('Conferir', { within: dialog })
+    await T.waitText('Nenhum comprovante desta sala')
+    await T.clickSel('.modal [aria-label="Fechar"]')
+    await T.waitFor(`!${dialog}`)
+  }, { timeout: 40_000 })
   await check('fim da prova não gerou alerta falso', async () => {
     const recent = await T.ev(`[...document.querySelectorAll('.alert-item')].slice(0, 12).map((e) => e.querySelector('b').textContent + ':' + e.querySelector('.kind').textContent + ':' + e.querySelector('time').textContent)`)
     console.log(`        últimos alertas: ${recent.join(', ')}`)
@@ -1195,6 +1222,24 @@ async function s9End() {
   await check('estrutura: resumo, prova e pasta da equipe', () => {
     assert(names.includes('resumo.csv') && names.includes('prova.json'), names.slice(0, 20))
     assert(names.includes(`grupos/${TEAM_A}/resumo.txt`), names.slice(0, 20))
+  })
+  await check('comprovante na exportação confere com os arquivos, por sha256', async () => {
+    const { createHash } = await import('node:crypto')
+    const sha = (text) => createHash('sha256').update(text, 'utf8').digest('hex')
+    assert(zip.texts['comprovantes.csv']?.includes(receiptId), 'comprovantes.csv sem o ID')
+    const text = zip.texts[`grupos/${TEAM_A}/Ana (2024A)/comprovante.txt`]
+    assert(text?.includes(receiptId), 'comprovante.txt sem o ID')
+    const first = text.split('Comprovante de entrega oblita_')[1]
+    const lines = first.match(/^[0-9a-f]{64} {2}.+$/gm) ?? []
+    assert(lines.length > 0, 'comprovante sem arquivos')
+    for (const line of lines) {
+      const [hash, path] = [line.slice(0, 64), line.slice(66)]
+      const content = zip.texts[`grupos/${TEAM_A}/${path}`]
+      assert(content !== undefined, `exportação sem ${path}`)
+      assert(sha(content) === hash, `${path} não confere`)
+    }
+    const stated = first.match(/Checksum \(SHA-256\): ([0-9a-f]{64})/)?.[1]
+    assert(stated === sha(lines.map((l) => `${l}\n`).join('')), 'checksum não é o da lista')
   })
   await check('integrantes com matrícula, alertas e gravações', () => {
     for (const who of ['Ana (2024A)', 'Bruno (2024B)']) {

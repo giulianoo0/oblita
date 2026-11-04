@@ -1,3 +1,4 @@
+import type { Receipt } from './receipt'
 import type { Lang, Question } from './exam'
 import type { Flow, QuestionClocks } from './flow'
 
@@ -154,6 +155,7 @@ export type TeacherMsg =
   | { t: 'clock'; endsAt: number; now: number }
   | { t: 'phase'; phase: Phase }
   | { t: 'ack'; stream: 'event' | 'rec'; seq: number }
+  | { t: 'receipt'; receipt: Receipt }
   | { t: 'warn'; text: string }
   | { t: 'focus'; on: boolean }
   | { t: 'team'; team: TeamInfo | null }
