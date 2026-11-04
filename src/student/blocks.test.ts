@@ -8,6 +8,7 @@ import {
   loadLayout,
   moveBlock,
   nudge,
+  parentDir,
   resetPair,
   resizePair,
   saveLayout,
@@ -321,6 +322,15 @@ function splitPaths(node: Node, path: number[] = []): { path: number[]; n: numbe
   if (node.type === 'block') return []
   return [{ path, n: node.items.length }, ...node.items.flatMap((i, k) => splitPaths(i.node, [...path, k]))]
 }
+
+describe('direção em que o bloco recolhe', () => {
+  test('é a da divisão em que ele está', () => {
+    expect(parentDir(DEFAULT, 'statement')).toBe('row')
+    expect(parentDir(DEFAULT, 'editor')).toBe('col')
+    expect(parentDir(DEFAULT, 'input')).toBe('row')
+    expect(parentDir(DEFAULT, 'nada')).toBeNull()
+  })
+})
 
 describe('qualquer sequência de operações', () => {
   const ZONES: Zone[] = ['left', 'right', 'top', 'bottom', 'center']

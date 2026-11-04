@@ -66,6 +66,11 @@ const same = (a: Layout, b: Layout) => JSON.stringify(a) === JSON.stringify(b)
 
 // --- recolher
 
+// O eixo em que o bloco vira faixa: o da divisão em que ele está.
+export function parentDir(layout: Layout, id: string): Dir | null {
+  return findLeaf(layout.root, id)?.parent?.dir ?? null
+}
+
 export function canCollapse(layout: Layout, id: string) {
   const ids = blockIds(layout)
   if (!ids.includes(id) || layout.collapsed.includes(id)) return false
