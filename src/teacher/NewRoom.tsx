@@ -1,5 +1,5 @@
 import { Check, ChevronDown, ChevronRight, Copy, FileJson, ImagePlus, Loader2, Plus, Sparkles, Trash2, Upload } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   validateExam,
@@ -219,8 +219,7 @@ export default function NewRoom() {
           <p className="muted">Uma prova por vez neste computador. Os alunos entram pelo seu IP, e tudo fica aqui.</p>
         </header>
 
-        <section className="card stack form-section">
-          <h2>Prova</h2>
+        <FoldCard title="Prova">
           <Field label="Título">
             <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Prova 1 de Algoritmos" />
           </Field>
@@ -234,10 +233,9 @@ export default function NewRoom() {
               <input className="input" type="password" autoComplete="new-password" placeholder="Opcional" value={password} onChange={(e) => setPassword(e.target.value)} />
             </Field>
           </div>
-        </section>
+        </FoldCard>
 
-        <section className="card stack form-section">
-          <h2>Formato</h2>
+        <FoldCard title="Formato">
           <div className="field">
             <span>Como é feita</span>
             <small className="field-hint">{mode === 'individual' ? 'Cada aluno com a própria prova.' : 'Os alunos montam equipes com um código e editam o mesmo código juntos.'}</small>
@@ -268,20 +266,15 @@ export default function NewRoom() {
               <Segmented stretch label="Início" value={timing} onChange={setTiming} options={[{ value: 'clock-in', label: 'Cada um no seu tempo' }, { value: 'global', label: 'Todos juntos' }]} />
             </div>
           )}
-        </section>
+        </FoldCard>
 
-        <section className="card form-section">
-          <h2>Vigilância</h2>
+        <FoldCard title="Vigilância" list>
           <Switch label="Gravar as telas" hint="Fica no seu computador, com o player e a exportação." checked={record} onChange={setRecord} />
           <Switch label="Exigir rede sem internet" hint="Só entrega a prova a quem não alcança a internet." checked={isolation} onChange={setIsolation} />
           <Switch label="Botão Testar" hint="O aluno roda os testes ocultos uma vez por minuto e vê só quantos passaram." checked={compiler} onChange={setCompiler} />
-        </section>
+        </FoldCard>
 
-        <section className="card stack form-section">
-          <div className="row wrap">
-            <h2 className="grow">Questões</h2>
-            <Segmented label="Origem das questões" value={source} onChange={setSource} options={[{ value: 'json', label: 'Arquivo' }, { value: 'build', label: 'Montar aqui' }]} />
-          </div>
+        <FoldCard title="Questões" aside={<Segmented label="Origem das questões" value={source} onChange={setSource} options={[{ value: 'json', label: 'Arquivo' }, { value: 'build', label: 'Montar aqui' }]} />}>
           {source === 'json' ? (
             <>
               <AssistantBanner onOpen={() => setAssistant(true)} />
@@ -300,7 +293,7 @@ export default function NewRoom() {
               </div>
             </>
           )}
-        </section>
+        </FoldCard>
 
         {errors.length > 0 && <div className="errbox">{errors.join('\n')}</div>}
         <div className="form-actions">
@@ -316,6 +309,31 @@ export default function NewRoom() {
 }
 
 const LLMS_URL = 'https://oblita.giuli.dev/llms.txt'
+
+// Seção do formulário que recolhe pelo título. Recolhida, o conteúdo continua montado (nada do que foi digitado se perde).
+// `list` junta os itens sem espaço entre eles, separados por linha, como os interruptores da vigilância.
+function FoldCard({ title, aside, list, children }: { title: string; aside?: ReactNode; list?: boolean; children: ReactNode }) {
+  const [open, setOpen] = useState(true)
+  const body = useId()
+  return (
+    <section className="card form-section fold" data-open={open || undefined}>
+      <div className="row wrap fold-head">
+        <h2 className="grow">
+          <button type="button" className="fold-toggle" aria-expanded={open} aria-controls={body} onClick={() => setOpen((v) => !v)}>
+            {title}
+            <ChevronDown size={18} className="fold-chevron" aria-hidden="true" />
+          </button>
+        </h2>
+        {open && aside}
+      </div>
+      <div className="fold-body" id={body} inert={!open || undefined}>
+        <div className="fold-inner">
+          <div className={list ? 'fold-content list' : 'fold-content'}>{children}</div>
+        </div>
+      </div>
+    </section>
+  )
+}
 
 function AssistantBanner({ onOpen }: { onOpen: () => void }) {
   return (

@@ -5,7 +5,8 @@ import { defaultStarter } from '../../shared/exam'
 
 type Peer = { applyDoc(u: Uint8Array): void; applyAware(u: Uint8Array): void }
 const frame = (id: string) => document.getElementById(id) as HTMLIFrameElement
-const peer = (id: string) => (frame(id).contentWindow as unknown as { __t: Peer }).__t
+// Durante a troca de tela o outro iframe recarrega e fica sem __t: a mensagem se perde, como na rede.
+const peer = (id: string) => (frame(id).contentWindow as unknown as { __t?: Peer }).__t
 
 let paused = false
 let queue: (() => void)[] = []
@@ -31,11 +32,11 @@ const host = {
   STARTERS,
   doc(from: string, update: Uint8Array) {
     const copy = new Uint8Array(update)
-    deliver(() => peer(from === 'a' ? 'b' : 'a').applyDoc(copy))
+    deliver(() => peer(from === 'a' ? 'b' : 'a')?.applyDoc(copy))
   },
   aware(from: string, update: Uint8Array) {
     const copy = new Uint8Array(update)
-    deliver(() => peer(from === 'a' ? 'b' : 'a').applyAware(copy))
+    deliver(() => peer(from === 'a' ? 'b' : 'a')?.applyAware(copy))
   },
   pause() {
     paused = true
