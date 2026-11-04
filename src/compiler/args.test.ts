@@ -76,6 +76,12 @@ describe('o compilador só enxerga os arquivos da resposta', () => {
     expect(r.log).not.toMatch(/root:/)
   }, 60_000)
 
+  test('caminho inválido vindo do documento não entra na árvore', () => {
+    const { tree, args } = compilerJob('c', { 'main.c': 'int main(void) { return 0; }\n', '../fora.c': 'x', '__proto__/x.c': 'y', 'a//b.c': 'z' })
+    expect(Object.keys(tree).sort()).toEqual(['__proto__', 'main.c'])
+    expect(args.filter((a) => a.endsWith('.c'))).toEqual(['main.c', '__proto__/x.c'])
+  })
+
   test('caminhos aceitam subpasta, e nunca sair da árvore', () => {
     expect(validFiles({ 'main.c': '', 'lib/util.h': '', 'lib/io/ler.c': '' })).toBe(true)
     for (const name of ['../x.c', '/etc/x.c', 'a//b.c', 'a/./b.c', 'a/../b.c', './a.c', 'a/b.c/', 'a\\b.c', '..', '.c', 'C:x.c', 'C:/x.c', 'x.c\0', 'x.txt', 'lib/x.txt', 'con/x.c', 'lib/aux.h', 'lib./x.c', '.git/x.c', 'a/b/c/d/x.c', `${'a'.repeat(48)}/${'b'.repeat(48)}/${'c'.repeat(30)}.c`])

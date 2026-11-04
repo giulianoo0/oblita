@@ -1,5 +1,5 @@
 import type { Tree } from '@yowasp/clang'
-import { RUN_LIMITS } from '../../shared/protocol'
+import { RUN_LIMITS, validPath } from '../../shared/protocol'
 
 // Este build do compilador não tem exceções de C++. Com estes símbolos, código com try/catch
 // compila normalmente, e só um throw executado de verdade encerra o programa, com mensagem clara.
@@ -29,8 +29,10 @@ function nest(files: Record<string, string>) {
 }
 
 // O clang só enxerga esta árvore virtual: os arquivos da resposta e os headers do próprio
-// toolchain. Nenhum caminho vem do aluno além dos nomes, que já passaram por validFiles.
-export function compilerJob(lang: 'c' | 'cpp', files: Record<string, string>) {
+// toolchain. Nenhum caminho vem do aluno além dos nomes, e um nome fora de validPath (o documento
+// do colega pode ter qualquer chave) fica de fora em vez de virar pasta.
+export function compilerJob(lang: 'c' | 'cpp', all: Record<string, string>) {
+  const files = Object.fromEntries(Object.entries(all).filter(([name]) => validPath(name)))
   const tree = nest(files)
   const inputs = Object.keys(files).filter((n) => (lang === 'c' ? n.endsWith('.c') : /\.(c|cc|cpp)$/.test(n)))
   if (lang === 'cpp') {
