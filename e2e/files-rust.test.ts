@@ -161,7 +161,7 @@ run('a pasta da prova recebe a estrutura do zip, o vídeo por pedaços e o aviso
     `${base}/alunos/Ana Ação (123)/resumo.txt`,
     `${base}/alunos/Ana Ação (123)/alertas.csv`,
     `${base}/alunos/Ana Ação (123)/q1/main.cpp`,
-    `${base}/alunos/Ana Ação (123)/q1/__fora.cpp`,
+    `${base}/alunos/Ana Ação (123)/q1/_/fora.cpp`, // o ".." vira "_": fica dentro da questão
     `${base}/alunos/Ana Ação (123)/q1/nota.txt`,
     `${base}/alunos/Ana Ação (123)/gravacao/0000.webm`,
     `${base}/alunos/__.._CON/q1/sem-resposta.txt`,
