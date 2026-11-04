@@ -3,7 +3,7 @@
 import type { Question } from '../../shared/exam'
 import type { Group, RoomMode } from '../../shared/protocol'
 import type { Student, Team } from './room'
-import { normalize } from './search'
+import { normalize, words } from './search'
 
 export type Presence = 'online' | 'offline' | 'noscreen'
 export type Cell = { points: number; failed: boolean } | 'pending' | 'manual' | null
@@ -20,6 +20,7 @@ export interface RosterRow {
   total: number | null
   alerts: number
   last: number
+  lastLabel: string
   // Nome, matrícula e equipe, já normalizados para a busca.
   hay: string
   // Tudo o que aparece na linha: igual, a linha não precisa redesenhar.
@@ -61,12 +62,15 @@ function presenceOf(s: Student): Presence {
   return 'online'
 }
 
+// Um formatador só: criar um por chamada aparecia no perfil, 100 linhas a cada segundo.
+const clock = new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' })
+
 export function activityLabel(last: number, now: number) {
   if (!last) return '—'
   const ago = now - last
   if (ago < 60_000) return 'agora'
   if (ago < 3600_000) return `há ${Math.floor(ago / 60_000)} min`
-  return new Date(last).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+  return clock.format(last)
 }
 
 export function buildRows(src: RosterSource, now: number): RosterRow[] {
@@ -82,8 +86,9 @@ export function buildRows(src: RosterSource, now: number): RosterRow[] {
     const enrollment = s.enrollment ?? ''
     const presence = presenceOf(s)
     const finished = !!s.finishedAt
-    const sig = JSON.stringify([s.name, enrollment, teamName, presence, finished, cells, total, s.alerts, activityLabel(last, now)])
-    rows.push({ id: s.clientId, name: s.name, enrollment, team: teamName, presence, finished, cells, answered, total, alerts: s.alerts, last, hay: normalize(`${s.name} ${enrollment} ${teamName}`), sig })
+    const lastLabel = activityLabel(last, now)
+    const sig = JSON.stringify([s.name, enrollment, teamName, presence, finished, cells, total, s.alerts, lastLabel])
+    rows.push({ id: s.clientId, name: s.name, enrollment, team: teamName, presence, finished, cells, answered, total, alerts: s.alerts, last, lastLabel, hay: normalize(`${s.name} ${enrollment} ${teamName}`), sig })
   }
   return rows
 }
@@ -104,8 +109,6 @@ export const EMPTY_QUERY: RosterQuery = { text: '', filters: [], question: null 
 
 const PRESENCE_FILTERS: Filter[] = ['online', 'offline', 'noscreen']
 const ANSWER_FILTERS: Filter[] = ['empty', 'graded']
-
-const words = (text: string) => normalize(text).split(/\s+/).filter(Boolean)
 
 export const isFiltering = (q: RosterQuery) => q.text.trim() !== '' || q.filters.length > 0 || q.question !== null
 
@@ -207,7 +210,7 @@ export function readQuery(params: URLSearchParams): RosterState {
   const dot = ordem.lastIndexOf('.')
   const key = ordem.slice(0, dot)
   const dir = ordem.slice(dot + 1)
-  const sort = dot > 0 && isKey(key) && (dir === 'asc' || dir === 'desc') ? { key, dir } : DEFAULT_SORT
+  const sort: Sort = dot > 0 && isKey(key) && (dir === 'asc' || dir === 'desc') ? { key, dir } : DEFAULT_SORT
   const vista = params.get('vista')
   const view = (Object.keys(VIEW_PARAM) as View[]).find((v) => VIEW_PARAM[v] === vista) ?? null
   return { query: { text: params.get('busca') ?? '', filters, question: params.get('questao') || null }, sort, view }

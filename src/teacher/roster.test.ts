@@ -96,7 +96,9 @@ describe('linhas', () => {
 
   test('última atividade é o mais recente entre batida, entrega e alerta', () => {
     const s = student('a', 'Ana', { lastBeat: NOW - 90_000, finishedAt: NOW - 60_000 })
-    expect(buildRows(source([s]), NOW)[0].last).toBe(NOW - 60_000)
+    const row = buildRows(source([s]), NOW)[0]
+    expect(row.last).toBe(NOW - 60_000)
+    expect(row.lastLabel).toBe('há 1 min')
   })
 
   test('a assinatura muda só quando algo visível muda', () => {
