@@ -1,13 +1,14 @@
-import { CircleCheck, CircleX, FlaskConical, Info, LoaderCircle, Pencil, Play, Plus, Square, Trash2 } from 'lucide-react'
-import { useEffect, useReducer, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { CircleCheck, CircleX, FlaskConical, Info, LoaderCircle, Play, Square } from 'lucide-react'
+import { useEffect, useReducer, useRef, useState } from 'react'
 import type { Awareness } from 'y-protocols/awareness'
 import type { CodeQuestion, Lang } from '../../shared/exam'
-import { FILE_NAME, MAX_CODE_BYTES, MAX_FILES, RUN_LIMITS } from '../../shared/protocol'
+import { MAX_CODE_BYTES, RUN_LIMITS, validPath } from '../../shared/protocol'
 import { useObservable } from '../lib/store'
-import { Modal, Pill, Segmented, useTick } from '../ui/kit'
+import { Pill, Segmented, useTick } from '../ui/kit'
 import { CollabEditor, peersOf, type Peer } from './collabEditor'
 import { registerCompletions } from './completions'
 import './exam.css'
+import { FileExplorer } from './FileExplorer'
 import { EDITOR_FONT, monaco, remeasureWhenFontLoads, showDiagnostics } from './monaco'
 import { internalClipboard } from './proctor'
 import { defaultStarter, mainFile, studentSession } from './session'
@@ -22,7 +23,6 @@ const remembered = { file: new Map<string, string>(), stdin: new Map<string, str
 const lastJob = { run: '', test: '' }
 let currentEditor: Editor | null = null
 
-const isSource = (file: string, lang: Lang) => (lang === 'c' ? file.endsWith('.c') : /\.(c|cc|cpp)$/.test(file))
 const starterOf = (q: CodeQuestion, lang: Lang) => q.starter?.[lang] ?? defaultStarter(lang)
 const lf = (text: string) => text.replace(/\r\n?/g, '\n')
 
@@ -119,17 +119,7 @@ export function usePeers(awareness: Awareness) {
   return peersOf(awareness)
 }
 
-// Pontinhos coloridos de quem está ali: na aba da questão e na linha do arquivo.
-export function PeerDots({ peers }: { peers: Peer[] }) {
-  if (!peers.length) return null
-  return (
-    <span className="peer-dots" title={peers.map((p) => p.name).join(', ')}>
-      {peers.slice(0, 4).map((p) => (
-        <i key={p.id} style={{ background: `hsl(${p.hue} 70% 50%)` }} />
-      ))}
-    </span>
-  )
-}
+export { PeerDots } from './FileExplorer'
 
 // Os colegas no cabeçalho do editor. O nome só entra como texto.
 function Presence({ peers, questions }: { peers: Peer[]; questions: string[] }) {
@@ -155,11 +145,9 @@ export function CodeWorkspace({ question }: { question: CodeQuestion }) {
   const open = s.questionOpen(question.id)
   const lang = answer?.type === 'code' ? answer.lang : question.languages[0]
   const files = answer?.type === 'code' ? answer.files : {}
-  const names = Object.keys(files).filter((name) => FILE_NAME.test(name)).sort()
+  const names = Object.keys(files).filter(validPath).sort()
   const [, bump] = useReducer((n: number) => n + 1, 0)
   const [view, setView] = useState<'output' | 'tests'>('output')
-  const [renaming, setRenaming] = useState<{ from: string | null; value: string; error?: string } | null>(null)
-  const [deleting, setDeleting] = useState<string | null>(null)
   const mount = useRef<HTMLDivElement>(null)
   const editorRef = useRef<Editor | null>(null)
   const collabRef = useRef<CollabEditor | null>(null)
@@ -247,10 +235,10 @@ export function CodeWorkspace({ question }: { question: CodeQuestion }) {
     if (report) showDiagnostics(report.questionId, report.log)
   }, [report])
 
-  const selectFile = (file: string) => {
+  const selectFile = (file: string, focus = true) => {
     remembered.file.set(question.id, file)
     bump()
-    editorRef.current?.focus()
+    if (focus) editorRef.current?.focus()
   }
 
   // Sem entrar no desfazer: quem troca a linguagem não espera perder isso num Ctrl+Z, e o colega recebe tudo de uma vez.
@@ -278,72 +266,12 @@ export function CodeWorkspace({ question }: { question: CodeQuestion }) {
     })
   }
 
-  const fileNameError = (name: string, from: string | null) => {
-    if (!FILE_NAME.test(name)) return 'Use letras e .c, .cpp ou .h'
-    if (lang === 'c' && !/\.[ch]$/.test(name)) return 'Em C, use .c ou .h'
-    if (name !== from && s.doc.files(question.id).has(name)) return 'Esse nome já existe'
-    if (from === null && names.length >= MAX_FILES) return `No máximo ${MAX_FILES} arquivos`
-    if (from && isSource(from, lang) && !isSource(name, lang) && names.filter((n) => isSource(n, lang)).length === 1) return 'Precisa de um arquivo de código'
-    return null
-  }
-
-  const commitName = () => {
-    if (!renaming) return
-    const raw = renaming.value.trim()
-    if (!raw) return setRenaming(null)
-    const name = /\.\w+$/.test(raw) ? raw : `${raw}.${lang === 'c' ? 'c' : 'cpp'}`
-    if (name === renaming.from) return setRenaming(null)
-    const error = fileNameError(name, renaming.from)
-    if (error) return setRenaming({ ...renaming, error })
-    if (renaming.from === null) {
-      s.doc.addFile(question.id, name)
-      remembered.file.set(question.id, name)
-    } else s.doc.renameFile(question.id, renaming.from, name)
-    setRenaming(null)
-  }
-
-  const onNameKey = (e: ReactKeyboardEvent) => {
-    if (e.key === 'Enter') commitName()
-    if (e.key === 'Escape') setRenaming(null)
-  }
-
-  const removeFile = (file: string) => {
-    s.doc.removeFile(question.id, file)
-    setDeleting(null)
-  }
-
-  const lastSource = (file: string) => isSource(file, lang) && names.filter((n) => isSource(n, lang)).length === 1
   const totalSize = Object.values(files).reduce((sum, text) => sum + text.length, 0)
 
   return (
     <div className="workspace">
       <div className="ide">
-        <div className="files" role="listbox" aria-label="Arquivos" inert={!open}>
-          <div className="files-head">
-            <span>Arquivos</span>
-            <button type="button" className="ghost" aria-label="Novo arquivo" title="Novo arquivo" disabled={names.length >= MAX_FILES} onClick={() => setRenaming({ from: null, value: '' })}>
-              <Plus size={14} />
-            </button>
-          </div>
-          {names.map((file) =>
-            renaming?.from === file ? (
-              <input key={file} className="file-new" autoFocus spellCheck={false} aria-label={`Novo nome de ${file}`} value={renaming.value} onChange={(e) => setRenaming({ ...renaming, value: e.target.value, error: undefined })} onKeyDown={onNameKey} onBlur={commitName} />
-            ) : (
-              <div key={file} className="file" role="option" tabIndex={0} aria-selected={file === active} title={file} onClick={() => selectFile(file)} onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && selectFile(file)} onDoubleClick={() => setRenaming({ from: file, value: file })}>
-                <span>{file}</span>
-                <PeerDots peers={peers.filter((p) => p.q === question.id && p.file === file)} />
-                <button type="button" className="x" aria-label={`Renomear ${file}`} title="Renomear" onClick={(e) => { e.stopPropagation(); setRenaming({ from: file, value: file }) }}>
-                  <Pencil size={12} />
-                </button>
-                <button type="button" className="x" aria-label={`Apagar ${file}`} title="Apagar" disabled={lastSource(file)} onClick={(e) => { e.stopPropagation(); setDeleting(file) }}>
-                  <Trash2 size={12} />
-                </button>
-              </div>
-            ),
-          )}
-          {renaming?.from === null && <input className="file-new" autoFocus spellCheck={false} aria-label="Nome do novo arquivo" placeholder={lang === 'c' ? 'util.c' : 'util.cpp'} value={renaming.value} onChange={(e) => setRenaming({ ...renaming, value: e.target.value, error: undefined })} onKeyDown={onNameKey} onBlur={commitName} />}
-          {renaming?.error && <div className="files-error" role="alert">{renaming.error}</div>}
-        </div>
+        <FileExplorer questionId={question.id} lang={lang} doc={s.doc} names={names} active={active} peers={peers} editable={open} onSelect={selectFile} />
         <div className="editor-host">
           <div className="editor-tabs">
             <span className="editor-name grow">{active}</span>
@@ -375,14 +303,6 @@ export function CodeWorkspace({ question }: { question: CodeQuestion }) {
           void s.runTest(question.id)
         }}
       />
-      <Modal open={deleting !== null} title={`Apagar ${deleting ?? ''}?`} onClose={() => setDeleting(null)}>
-        <div className="row" style={{ justifyContent: 'flex-end' }}>
-          <Pill onClick={() => setDeleting(null)}>Manter</Pill>
-          <Pill tone="danger" onClick={() => deleting && removeFile(deleting)}>
-            Apagar
-          </Pill>
-        </div>
-      </Modal>
     </div>
   )
 }
