@@ -7,7 +7,7 @@ import { gzipSync } from 'node:zlib'
 const DIST = process.argv[2] ?? 'dist'
 const GZIP_OVER = 20 * 1024 * 1024
 const ASSET_LIMIT = 25 * 1024 * 1024
-const SKIP = new Set(['_headers', '_redirects', 'sw.js', 'precache.json', 'index.html'])
+const SKIP = new Set(['_headers', '_redirects', 'sw.js', 'precache.json', 'index.html', 'build.json'])
 const MIME = { '.wasm': 'application/wasm', '.tar': 'application/x-tar' }
 
 function walk(dir) {
@@ -45,6 +45,10 @@ for (const path of walk(DIST)) {
   if (size > ASSET_LIMIT) throw new Error(`${path} passa do limite do Workers: ${size} bytes`)
 }
 
+// O service worker guarda isto com cada versão: é como a página acha uma versão em cache que fale
+// o mesmo protocolo do professor.
+const { id: build, protocol } = JSON.parse(readFileSync(join(DIST, 'build.json'), 'utf8'))
+if (!build || !Number.isInteger(protocol)) throw new Error('build.json sem versão ou protocolo')
 const version = hash.digest('hex').slice(0, 16)
-writeFileSync(join(DIST, 'precache.json'), JSON.stringify({ version, files }))
-console.log(`precache ${version}: ${files.length} arquivos`)
+writeFileSync(join(DIST, 'precache.json'), JSON.stringify({ version, build, protocol, files }))
+console.log(`precache ${version} (${build}, protocolo ${protocol}): ${files.length} arquivos`)

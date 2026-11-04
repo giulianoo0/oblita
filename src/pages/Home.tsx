@@ -4,6 +4,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useOffline } from '../lib/offline'
 import { parseAddress } from '../net/link'
+import { BuildVersion } from '../ui/BuildVersion'
 import { Logo, Pill } from '../ui/kit'
 
 // O lucide não traz mais logos de marca: o do GitHub vai aqui, em 16 px.
@@ -74,7 +75,10 @@ export function Home() {
     <div className="home">
       <header className="home-top">
         <Logo />
-        <OfflineStatus />
+        <div className="row">
+          <BuildVersion offerUpdate />
+          <OfflineStatus />
+        </div>
       </header>
       <main className="home-hero">
         <h1 className="home-title">

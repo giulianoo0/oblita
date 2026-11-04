@@ -1,9 +1,12 @@
 // Guarda o site inteiro na primeira visita. Depois disso nada aqui depende de rede.
 // Só instala quando tudo foi baixado: um cache pela metade falharia no meio da prova.
 const PREFIX = 'oblita-'
+const META = 'oblita-meta'
 const KEEP_VERSIONS = 2
 const CONCURRENCY = 6
 const RETRIES = 3
+// Fixação esquecida (aluno fechou a aba no meio) não pode prender a página numa versão velha.
+const PIN_TTL_MS = 12 * 60 * 60 * 1000
 const NO_CACHE = new Set(['/signal', '/healthz', '/precache.json', '/sw.js'])
 
 let progress = { done: 0, total: 0 }
@@ -61,12 +64,6 @@ async function precache() {
   await cache.put('/__manifest', new Response(JSON.stringify({ ...manifest, at: Date.now() })))
 }
 
-// caches.match procura da versão mais antiga para a mais nova: a página tem de vir da mais nova.
-async function newestCache() {
-  const dated = await datedCaches()
-  return dated[0] ? caches.open(dated[0].name) : null
-}
-
 self.addEventListener('install', (event) => {
   event.waitUntil(
     precache()
@@ -78,21 +75,70 @@ self.addEventListener('install', (event) => {
   )
 })
 
+// Da mais nova para a mais antiga. `build` e `protocol` só existem a partir da versão que os grava.
 async function datedCaches() {
-  const names = (await caches.keys()).filter((n) => n.startsWith(PREFIX))
+  const names = (await caches.keys()).filter((n) => n.startsWith(PREFIX) && n !== META)
   const dated = await Promise.all(
     names.map(async (name) => {
       const res = await (await caches.open(name)).match('/__manifest')
-      return { name, at: res ? (await res.json()).at : 0 }
+      const m = res ? await res.json() : {}
+      return { name, at: m.at ?? 0, build: m.build ?? null, protocol: m.protocol ?? 1, version: m.version ?? null }
     }),
   )
   return dated.sort((a, b) => b.at - a.at)
 }
 
+async function readPin() {
+  const res = await (await caches.open(META)).match('/__pin')
+  if (!res) return null
+  const pin = await res.json().catch(() => null)
+  if (!pin || Date.now() - pin.at > PIN_TTL_MS) return null
+  return pin
+}
+
+async function writePin(pin) {
+  const meta = await caches.open(META)
+  if (pin) await meta.put('/__pin', new Response(JSON.stringify(pin)))
+  else await meta.delete('/__pin')
+}
+
+// A página tem de vir da versão fixada, se houver; senão, da mais nova.
+// caches.match procura da versão mais antiga para a mais nova, então isto não pode ser caches.match.
+async function pageCache() {
+  const dated = await datedCaches()
+  const pin = await readPin()
+  const pinned = pin && dated.find((d) => d.build === pin.build)
+  const pick = pinned ?? dated[0]
+  return pick ? caches.open(pick.name) : null
+}
+
+// Pergunta a cada aba aberta qual versão ela está rodando: essas não podem sumir do cache.
+async function buildsInUse() {
+  const clients = await self.clients.matchAll({ type: 'window' })
+  const answers = await Promise.all(
+    clients.map(
+      (client) =>
+        new Promise((resolve) => {
+          const channel = new MessageChannel()
+          const timer = setTimeout(() => resolve(null), 1000)
+          channel.port1.onmessage = (e) => {
+            clearTimeout(timer)
+            resolve(e.data?.build ?? null)
+          }
+          client.postMessage({ type: 'which-build' }, [channel.port2])
+        }),
+    ),
+  )
+  return new Set(answers.filter(Boolean))
+}
+
 async function prune() {
   const dated = await datedCaches()
-  // Mantém a versão anterior: uma aba em plena prova ainda pede os arquivos dela.
-  await Promise.all(dated.slice(KEEP_VERSIONS).map(({ name }) => caches.delete(name)))
+  const pin = await readPin()
+  const used = await buildsInUse()
+  // Mantém as mais novas, a fixada e qualquer uma que uma aba aberta (em plena prova) ainda use.
+  const drop = dated.slice(KEEP_VERSIONS).filter((d) => !d.build || (d.build !== pin?.build && !used.has(d.build)))
+  await Promise.all(drop.map(({ name }) => caches.delete(name)))
 }
 
 self.addEventListener('activate', (event) => {
@@ -101,15 +147,35 @@ self.addEventListener('activate', (event) => {
       await prune()
       await self.clients.claim()
       await broadcast({ type: 'precache', done: progress.total || 1, total: progress.total || 1 })
+      const [newest] = await datedCaches()
+      if (newest?.build) await broadcast({ type: 'updated', build: newest.build, protocol: newest.protocol })
     })(),
   )
 })
 
+const reply = (event, data) => event.ports[0]?.postMessage(data)
+
 self.addEventListener('message', (event) => {
-  if (event.data?.type === 'precache-status') {
+  const m = event.data
+  if (m?.type === 'precache-status') {
     const total = progress.total || 1
     event.source?.postMessage({ type: 'precache', done: progress.total ? progress.done : total, total })
+    return
   }
+  const work = (async () => {
+    if (m?.type === 'builds') return reply(event, (await datedCaches()).filter((d) => d.build).map(({ build, protocol, version, at }) => ({ build, protocol, version, at })))
+    if (m?.type === 'pin-status') return reply(event, await readPin())
+    if (m?.type === 'pin' && typeof m.build === 'string') {
+      const exists = (await datedCaches()).some((d) => d.build === m.build)
+      if (exists) await writePin({ build: m.build, reason: m.reason === 'version' ? 'version' : 'exam', at: Date.now() })
+      return reply(event, exists)
+    }
+    if (m?.type === 'unpin') {
+      await writePin(null)
+      return reply(event, true)
+    }
+  })()
+  event.waitUntil?.(work)
 })
 
 self.addEventListener('fetch', (event) => {
@@ -121,7 +187,7 @@ self.addEventListener('fetch', (event) => {
     // Abrir um arquivo do site em aba própria (o /llms.txt) também é navegação: ele vem do cache como está.
     // O resto é rota do app e recebe a página.
     event.respondWith(
-      newestCache()
+      pageCache()
         .then(async (cache) => (url.pathname !== '/' && (await cache?.match(url.pathname))) || cache?.match('/'))
         .then((hit) => hit ?? fetch(request)),
     )

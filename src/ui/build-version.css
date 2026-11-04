@@ -1,0 +1,3 @@
+.build-version { flex: none; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-faint); white-space: nowrap; }
+button.build-version { border: 0; padding: 0; background: none; cursor: pointer; }
+.build-version.update { color: var(--primary); }
