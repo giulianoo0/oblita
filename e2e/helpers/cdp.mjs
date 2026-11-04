@@ -4,7 +4,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-export const EDGE = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
+// BROWSER troca o executável (Chrome onde não há Edge); sem ela, o Edge do Windows.
+export const EDGE = process.env.BROWSER || 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 export const killTree = (p) => {
