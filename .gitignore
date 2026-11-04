@@ -1,0 +1,12 @@
+node_modules
+dist
+.wrangler
+*.log
+host/target
+.env*
+tests/wasm-report.json
+.claude/settings.local.json
+dist-deploy
+e2e/shots
+.claude
+*.tsbuildinfo

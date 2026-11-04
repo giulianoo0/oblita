@@ -1,0 +1,67 @@
+name: host
+
+on:
+  push:
+    branches: [main]
+    tags: ['host-v*']
+    paths:
+      - 'host/**'
+      - '.github/workflows/host.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: host-${{ github.ref }}
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: host
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: host
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Clippy
+        continue-on-error: true
+        run: cargo clippy --all-targets --locked
+
+      - name: Smoke test
+        run: ./smoke.ps1 -Exe target/release/oblita-host.exe
+
+      - name: Upload exe
+        uses: actions/upload-artifact@v7
+        with:
+          name: oblita-host
+          path: host/target/release/oblita-host.exe
+          if-no-files-found: error
+
+      - name: Publish release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view host-latest *> $null
+          if ($LASTEXITCODE) {
+            gh release create host-latest --title "Oblita Host" --notes "Última versão do programa de rede local do Oblita." --target $env:GITHUB_SHA
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+          gh release upload host-latest target/release/oblita-host.exe --clobber
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }

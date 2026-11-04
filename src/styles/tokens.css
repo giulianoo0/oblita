@@ -1,0 +1,225 @@
+@font-face {
+  font-family: 'Geist Serif';
+  src: url('../assets/fonts/GeistSerifVF.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: light dark;
+
+  --sky-300: oklch(0.76 0.11 256);
+  --sky-400: oklch(0.664 0.147 257);
+  --sky-500: oklch(0.55 0.17 258);
+  --sky-600: oklch(0.5 0.18 259);
+  --red-300: oklch(0.8 0.1 25);
+  --red-500: oklch(0.637 0.208 25);
+  --red-600: oklch(0.577 0.213 25);
+  --green-500: oklch(0.72 0.15 150);
+  --green-600: oklch(0.627 0.194 149);
+  --amber-500: oklch(0.77 0.16 70);
+  --amber-600: oklch(0.67 0.16 58);
+  --orange-500: oklch(0.72 0.18 41);
+  --orange-600: oklch(0.67 0.19 39);
+
+  --background: #ededee;
+  --surface: #fff;
+  --surface-2: #ececed;
+  --surface-3: #e2e2e4;
+  --overlay: #fff;
+  --tile: #fff;
+  --tile-2: #e2e2e4;
+  --text: #111;
+  --text-muted: #5f5f63;
+  --text-faint: #8e8e93;
+  --line: rgb(0 0 0 / 8%);
+  --line-strong: rgb(0 0 0 / 14%);
+  --field: color-mix(in oklab, #111 5%, transparent);
+  --primary: var(--sky-500);
+  --primary-hover: var(--sky-600);
+  --on-primary: #fff;
+  --brand: var(--orange-500);
+  --brand-hover: var(--orange-600);
+  --on-brand: oklch(0.2 0.04 40);
+  --danger: var(--red-600);
+  --on-danger: #fff;
+  --soft: color-mix(in oklab, var(--text) 5%, transparent);
+  --soft-hover: color-mix(in oklab, var(--text) 10%, transparent);
+  --segment-track: rgb(0 0 0 / 6%);
+  --segment-chip: #fff;
+  --status-success: var(--green-600);
+  --status-warning: var(--amber-600);
+  --status-danger: var(--red-600);
+  --status-danger-soft: color-mix(in oklab, var(--red-600) 12%, transparent);
+  --status-danger-ink: oklch(0.45 0.17 25);
+  --popover-glass: color-mix(in oklab, #fff 72%, transparent);
+  --popover-filter: blur(28px) saturate(160%);
+  --scrim: rgb(0 0 0 / 45%);
+  --scrim-strong: rgb(0 0 0 / 62%);
+  --scrim-filter: blur(16px);
+  --on-scrim: #fff;
+  --shadow-float: 0 1px 2px oklch(0 0 0 / 0.04), 0 16px 40px -18px oklch(0 0 0 / 0.14);
+  --shadow-chip: inset 0 1px 0 oklch(1 0 0 / 0.1), 0 2px 4px -1px oklch(0 0 0 / 0.05), 0 0 0 1px oklch(0 0 0 / 0.06);
+
+  --radius: 0.625rem;
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-full: 999px;
+
+  --text-2xs: 0.6875rem;
+  --text-xs: 0.78125rem;
+  --text-sm: 0.84375rem;
+  --text-base: 0.875rem;
+  --text-lg: 1rem;
+  --text-xl: 1.25rem;
+  --text-2xl: 1.5625rem;
+
+  --ease-spring-pop: linear(0, 0.058, 0.191, 0.352, 0.513, 0.656, 0.774, 0.865, 0.932, 0.977, 1.005, 1.021, 1.027, 1.028, 1.026, 1.022, 1.017, 1.013, 1.009, 1.006, 1.003, 1.001, 1, 1, 1);
+  --ease-spring-settle: linear(0, 0.073, 0.222, 0.382, 0.527, 0.648, 0.742, 0.814, 0.868, 0.907, 0.935, 0.955, 0.969, 0.978, 0.985, 0.99, 1);
+  --ease-slide: linear(0, 0.047, 0.156, 0.29, 0.427, 0.553, 0.663, 0.754, 0.826, 0.882, 0.923, 0.953, 0.974, 0.988, 0.997, 1.002, 1.005, 1.006, 1.006, 1.006, 1.005, 1.004, 1.003, 1.003, 1.002, 1);
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --dur-press: 140ms;
+  --dur-fast: 160ms;
+  --dur-base: 220ms;
+  --dur-slow: 320ms;
+  --dur-pop: 600ms;
+  --dur-settle: 360ms;
+
+  --font-sans: 'Geist Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'Geist Mono Variable', ui-monospace, Consolas, monospace;
+  --font-serif: 'Geist Serif', Georgia, serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --background: #0f0f0f;
+    --surface: #1f1f1f;
+    --surface-2: #282828;
+    --surface-3: #3d3f40;
+    --overlay: #282828;
+    --tile: #232322;
+    --tile-2: #2e2e2d;
+    --text: #ededed;
+    --text-muted: #9b9b9b;
+    --text-faint: #6e6e6e;
+    --line: rgb(255 255 255 / 7%);
+    --line-strong: rgb(255 255 255 / 12%);
+    --field: color-mix(in oklab, #fff 4%, transparent);
+    --primary: var(--sky-400);
+    --primary-hover: var(--sky-300);
+    --on-primary: oklch(0.15 0.03 262);
+    --danger: var(--red-500);
+    --soft: color-mix(in oklab, var(--text) 7%, transparent);
+    --soft-hover: color-mix(in oklab, var(--text) 12%, transparent);
+    --segment-track: rgb(255 255 255 / 6%);
+    --segment-chip: #282828;
+    --status-success: var(--green-500);
+    --status-warning: var(--amber-500);
+    --status-danger: var(--red-500);
+    --status-danger-soft: color-mix(in oklab, var(--red-500) 22%, transparent);
+    --status-danger-ink: var(--red-300);
+    --popover-glass: color-mix(in oklab, #282828 72%, transparent);
+    --shadow-float: 0 1px 2px rgb(0 0 0 / 40%), 0 20px 44px -20px rgb(0 0 0 / 70%);
+    --shadow-chip: inset 0 1px 0 oklch(1 0 0 / 0.06), 0 0 0 1px oklch(1 0 0 / 0.07);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+code,
+kbd {
+  font-family: var(--font-mono);
+}
+
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--primary) 30%, transparent);
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+    filter: blur(8px);
+  }
+}
+
+@keyframes settle-in {
+  from {
+    opacity: 0;
+    filter: blur(4px);
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes breathe {
+  to {
+    box-shadow: 0 0 0 0.5rem color-mix(in oklab, var(--primary) 18%, transparent);
+  }
+}
+
+@keyframes alarm {
+  0%,
+  100% {
+    box-shadow: inset 0 0 0 2px var(--status-danger);
+  }
+  50% {
+    box-shadow: inset 0 0 0 2px var(--status-danger), 0 0 0 0.375rem var(--status-danger-soft);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}

@@ -1,0 +1,126 @@
+# Oblita
+
+> Plataforma de prova local de C e C++. Use este arquivo para gerar uma prova pronta para importar.
+
+## O que gerar
+
+Gere SEMPRE dois arquivos JSON, em dois blocos separados, nesta ordem:
+
+1. `exam.json`: a prova. Vai para os alunos quando a prova começa.
+2. `solutions.json`: o gabarito. Fica só com o professor.
+
+Regra mais importante: `exam.json` não pode conter resposta, dica de resposta, teste oculto nem código de referência. O Oblita recusa o arquivo se encontrar as chaves `solution`, `answer`, `correct`, `tests`, `hidden`, `reference`, `rubric`, `expected`, `gabarito` ou `resposta` em qualquer nível.
+
+## exam.json
+
+```json
+{
+  "version": 1,
+  "title": "Prova 1 de Algoritmos",
+  "durationMin": 90,
+  "questions": [
+    {
+      "id": "q1",
+      "type": "code",
+      "title": "Soma de vetor",
+      "statement": "Leia N e depois N inteiros. Imprima a soma.\n\n**Entrada:** N na primeira linha e os N inteiros na segunda.",
+      "points": 4,
+      "languages": ["c", "cpp"],
+      "starter": {
+        "c": "#include <stdio.h>\n\nint main(void) {\n    return 0;\n}\n",
+        "cpp": "#include <iostream>\n\nint main() {\n    return 0;\n}\n"
+      },
+      "samples": [{ "stdin": "3\n1 2 3\n", "stdout": "6\n" }]
+    },
+    {
+      "id": "q2",
+      "type": "choice",
+      "title": "Ponteiros",
+      "statement": "Qual o tamanho de `char` em C?",
+      "points": 1,
+      "multiple": false,
+      "options": [
+        { "id": "a", "text": "1 byte" },
+        { "id": "b", "text": "2 bytes" },
+        { "id": "c", "text": "Depende do compilador, sem mínimo" }
+      ]
+    },
+    {
+      "id": "q3",
+      "type": "text",
+      "title": "Complexidade",
+      "statement": "Explique a diferença entre O(n) e O(n log n).",
+      "points": 2
+    }
+  ]
+}
+```
+
+Campos:
+
+- `version`: sempre `1`.
+- `durationMin`: duração em minutos.
+- `questions[].id`: único na prova. Use `q1`, `q2`, e assim por diante.
+- `questions[].type`: `code`, `choice` ou `text`.
+- `questions[].statement`: Markdown.
+- `questions[].points`: maior que zero.
+- `code.languages`: `["c"]`, `["cpp"]` ou ambos.
+- `code.starter`: código inicial por linguagem. Opcional.
+- `code.samples`: exemplos visíveis ao aluno. Opcional. Nunca repita aqui um teste oculto.
+- `choice.multiple`: `true` se aceita mais de uma opção.
+
+## solutions.json
+
+```json
+{
+  "version": 1,
+  "solutions": [
+    {
+      "questionId": "q1",
+      "type": "code",
+      "reference": {
+        "lang": "cpp",
+        "code": "#include <iostream>\nint main() { int n, x; long long s = 0; std::cin >> n; while (n--) { std::cin >> x; s += x; } std::cout << s << '\\n'; }\n"
+      },
+      "tests": [
+        { "stdin": "1\n5\n", "stdout": "5\n", "points": 1 },
+        { "stdin": "4\n-1 1 -1 1\n", "stdout": "0\n", "points": 1, "checker": "tokens" },
+        { "stdin": "2\n2000000000 2000000000\n", "stdout": "4000000000\n", "points": 2, "timeoutMs": 3000 }
+      ]
+    },
+    { "questionId": "q2", "type": "choice", "correct": ["a"] },
+    { "questionId": "q3", "type": "text", "rubric": "O(n) cresce linear; O(n log n) cresce mais rápido. 2 pontos com exemplo." }
+  ]
+}
+```
+
+Campos:
+
+- `questionId`: precisa existir em `exam.json`, com o mesmo `type`.
+- `reference`: solução que passa em todos os testes. O Oblita a executa antes da prova para validar os testes.
+- `tests[].points`: a soma dos testes precisa ser igual aos `points` da questão.
+- `tests[].checker`: `tokens` (padrão, ignora espaços e quebras), `trim` (ignora espaço no fim da linha), `exact` (byte a byte) ou `float` (números com tolerância de 1e-6).
+- `tests[].timeoutMs`: limite por teste. Padrão: 2000.
+
+## Como escrever boas questões de código
+
+- Toda entrada vem por `stdin` e toda saída vai para `stdout`.
+- Inclua casos de borda nos testes: entrada mínima, valores negativos, estouro de `int` quando fizer sentido.
+- Não exija formatação que o enunciado não especifica.
+- Compilador: Clang, com C17 e C++20.
+
+## Bibliotecas disponíveis
+
+Biblioteca padrão de C e C++, como `stdio.h`, `stdlib.h`, `string.h`, `math.h`, `ctype.h`, `iostream`, `vector`, `string`, `map`, `set`, `algorithm`, `queue`, `stack`.
+
+O código roda em sandbox WebAssembly, na máquina do professor. Não use rede, threads, processos, arquivos, `conio.h`, `windows.h` nem `unistd.h`.
+
+Limitações importantes para os testes:
+
+- Sem exceções de C++. `try`/`catch` compila, mas um `throw` executado encerra o programa, inclusive os lançados pela biblioteca, como `vector::at` fora do limite ou `stoi` com texto inválido. Não exija tratamento de exceção.
+- Recursão muito profunda estoura a pilha antes do que em um programa nativo. Evite exigir mais do que alguns milhares de níveis.
+- O aluno pode pedir um teste por minuto. Ele vê os exemplos de `samples` por completo e, dos testes ocultos, só quantos passaram.
+- Cada execução tem limite de 256 MB de memória, 5 segundos e 1 MB de saída.
+- A questão de código pode ter vários arquivos `.c`, `.cpp`, `.h` e `.hpp`, todos na mesma pasta.
+
+`solutions.json` é opcional. Sem ele, o aluno ainda roda o programa e usa os exemplos de `samples`, e o professor corrige à mão.
