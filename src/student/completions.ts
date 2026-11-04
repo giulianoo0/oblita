@@ -1,6 +1,7 @@
 // Autocompletar offline para C e C++. Ainda não há clangd aqui: tudo sai destas tabelas e de
 // uma leitura do próprio código por regex, então é um palpite bom, não uma análise de verdade.
 import { monaco } from './monaco'
+import { includePaths } from './fileTree'
 
 type Model = monaco.editor.ITextModel
 type Position = monaco.Position
@@ -656,9 +657,13 @@ function scanFunctions(mask: string): Sym[] {
   return out
 }
 
-const dirOf = (model: Model) => model.uri.path.slice(0, model.uri.path.lastIndexOf('/') + 1)
-const fileOf = (model: Model) => model.uri.path.slice(model.uri.path.lastIndexOf('/') + 1)
-const siblings = (model: Model) => monaco.editor.getModels().filter((m) => dirOf(m) === dirOf(model))
+// Todos os arquivos da questão, inclusive os de subpasta: o caminho é /<questão>/<arquivo>.
+const questionOf = (model: Model) => (model.uri.scheme === 'file' ? model.uri.path.split('/')[1] : null)
+const fileOf = (model: Model) => model.uri.path.split('/').slice(2).join('/')
+const siblings = (model: Model) => {
+  const q = questionOf(model)
+  return q === null ? [model] : monaco.editor.getModels().filter((m) => questionOf(m) === q)
+}
 
 // ---- inferência de tipos
 
@@ -817,9 +822,7 @@ function includeItems(model: Model, position: Position, prefix: string): Item[] 
     endColumn: position.column + (after === closer ? 1 : 0),
   }
   if (m[1] === '"') {
-    return siblings(model)
-      .map(fileOf)
-      .filter((f) => /\.(h|hpp)$/.test(f) && f !== fileOf(model))
+    return includePaths(siblings(model).map(fileOf), fileOf(model))
       .map((f) => ({ label: f, kind: monaco.languages.CompletionItemKind.File, insertText: `${f}"`, filterText: f, range }))
   }
   const table = model.getLanguageId() === 'c' ? INCLUDES_C : [...INCLUDES_CPP, ...INCLUDES_C.slice(0, 3)]

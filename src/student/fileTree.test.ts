@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { fileKind, filesInside, visibleRows } from './fileTree'
+import { fileKind, filesInside, includePaths, visibleRows } from './fileTree'
 
 const rows = (files: string[], folders: string[] = [], collapsed: string[] = []) =>
   visibleRows(files, folders, new Set(collapsed)).map((r) => `${'  '.repeat(r.depth)}${r.kind === 'folder' ? `${r.name}/` : r.name}`)
@@ -42,5 +42,13 @@ describe('árvore de arquivos', () => {
 
   test('tipo do arquivo pela extensão', () => {
     expect(['a.c', 'a.cpp', 'a.cc', 'a.h', 'lib/a.hpp', 'a.txt'].map(fileKind)).toEqual(['c', 'cpp', 'cpp', 'h', 'h', 'other'])
+  })
+
+  // O clang daqui não sobe pasta com "..": só os headers da mesma pasta e das de dentro.
+  test('headers que dá para incluir, relativos a quem inclui', () => {
+    const files = ['main.c', 'a.h', 'lib/util.h', 'lib/io/ler.hpp', 'lib/util.c', 'outra/x.h']
+    expect(includePaths(files, 'main.c')).toEqual(['a.h', 'lib/io/ler.hpp', 'lib/util.h', 'outra/x.h'])
+    expect(includePaths(files, 'lib/util.c')).toEqual(['io/ler.hpp', 'util.h'])
+    expect(includePaths(files, 'lib/util.h')).toEqual(['io/ler.hpp'])
   })
 })

@@ -56,3 +56,13 @@ export function fileKind(path: string): FileKind {
   if (/\.(h|hpp)$/.test(path)) return 'h'
   return 'other'
 }
+
+// O #include "..." procura a partir da pasta de quem inclui, e o clang daqui não sobe pasta:
+// só servem os headers da mesma pasta e das de dentro, com o caminho relativo.
+export function includePaths(files: string[], current: string) {
+  const dir = current.slice(0, current.lastIndexOf('/') + 1)
+  return files
+    .filter((f) => f !== current && f.startsWith(dir) && fileKind(f) === 'h')
+    .map((f) => f.slice(dir.length))
+    .sort()
+}
