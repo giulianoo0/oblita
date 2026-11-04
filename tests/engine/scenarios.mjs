@@ -1316,7 +1316,8 @@ async function s8(h) {
   await h.case('o painel salva mesmo com atividade sem parar', async () => {
     // Com a turma mexendo o tempo todo, um adiamento a cada toque nunca salvaria.
     await a.call(() => T.busy('¶', 50))
-    const read = () => w.t.call((id) => T.idb.get('kv', `room:${id}`).then((s) => s.teams.find((t) => t.key.startsWith('g:'))?.doc?.length ?? 0), w.roomId)
+    // Cada equipe tem o documento numa chave própria (roomStore): room:<id>:doc:<equipe>.
+    const read = () => w.t.call(async (id, team) => (await T.idb.get('kv', `room:${id}:doc:${team}`))?.byteLength ?? 0, w.roomId, key)
     const pump = setInterval(() => w.t.call(() => T.room.touch()).catch(() => {}), 100)
     try {
       const first = await read()
