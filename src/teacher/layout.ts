@@ -53,9 +53,31 @@ const unique = (used: Set<string>, name: string, tail = '') => {
   return out
 }
 
-const uniqueFile = (used: Set<string>, name: string) => {
-  const dot = name.lastIndexOf('.')
-  return dot > 0 ? unique(used, name.slice(0, dot), name.slice(dot)) : unique(used, name)
+// Caminho com subpastas: cada nome passa por safeName, e pastas que só mudam em maiúsculas
+// viram uma só, como seriam no Windows. `used` guarda caminhos inteiros, em minúsculas.
+function codePaths(names: string[], used: Set<string>) {
+  const dirs = new Map<string, string>()
+  const pick = (dir: string, name: string) => {
+    const prefix = dir ? `${dir}/` : ''
+    const dot = name.lastIndexOf('.')
+    const [stem, tail] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, '']
+    let out = prefix + name
+    for (let i = 2; used.has(out.toLowerCase()); i++) out = `${prefix}${stem} (${i})${tail}`
+    used.add(out.toLowerCase())
+    return out
+  }
+  return names.map((name) => {
+    const parts = name.split('/').map(safeName)
+    const file = parts.pop()!
+    let dir = ''
+    for (const part of parts) {
+      const key = `${dir}/${part}`.toLowerCase()
+      let found = dirs.get(key)
+      if (found === undefined) dirs.set(key, (found = pick(dir, part)))
+      dir = found
+    }
+    return pick(dir, file)
+  })
 }
 
 const oneLine = (text: string) => text.replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, ' ')
@@ -104,8 +126,9 @@ function teamEntries(room: LayoutRoom, team: Team, dir: string, members: Student
     const answer = sub?.answer ?? team.answers[q.id]?.answer
     const base = `${dir}/${unique(names, safeName(q.id))}`
     if (answer?.type === 'code') {
-      const files = new Set(['nota.txt'])
-      for (const [name, content] of Object.entries(answer.files)) text(`${base}/${uniqueFile(files, safeName(name))}`, content)
+      const entries = Object.entries(answer.files)
+      const paths = codePaths(entries.map(([name]) => name), new Set(['nota.txt']))
+      entries.forEach(([, content], i) => text(`${base}/${paths[i]}`, content))
     } else if (answer?.type === 'text') text(`${base}/resposta.txt`, answer.text)
     else if (answer?.type === 'choice') text(`${base}/resposta.txt`, answer.selected.join(', ') + '\n')
     else text(`${base}/sem-resposta.txt`, '')
