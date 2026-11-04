@@ -143,6 +143,33 @@ async function clickSel(p, selector) {
   const r = await t(p, `(() => { const e = document.querySelector(${JSON.stringify(selector)}); if (!e) throw new Error('sem ' + ${JSON.stringify(selector)}); const b = e.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 } })()`)
   await click(o.x + r.x, o.y + r.y)
 }
+async function centerOf(p, selector) {
+  const o = await frameOrigin(p)
+  const r = await t(p, `(() => { const e = document.querySelector(${JSON.stringify(selector)}); if (!e) throw new Error('sem ' + ${JSON.stringify(selector)}); const b = e.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 } })()`)
+  return { x: o.x + r.x, y: o.y + r.y }
+}
+async function dblClick(x, y) {
+  await mouse('mouseMoved', x, y)
+  await mouse('mousePressed', x, y, { button: 'left', buttons: 1, clickCount: 1 })
+  await mouse('mouseReleased', x, y, { button: 'left', clickCount: 1 })
+  await mouse('mousePressed', x, y, { button: 'left', buttons: 1, clickCount: 2 })
+  await mouse('mouseReleased', x, y, { button: 'left', clickCount: 2 })
+  await sleep(60)
+}
+// Arrasta de verdade, em passos; sem `release` o botão fica apertado no fim.
+async function dragTo(from, to, { release = true, steps = 8 } = {}) {
+  await mouse('mouseMoved', from.x, from.y)
+  await mouse('mousePressed', from.x, from.y, { button: 'left', buttons: 1, clickCount: 1 })
+  for (let i = 1; i <= steps; i++) {
+    await mouse('mouseMoved', from.x + ((to.x - from.x) * i) / steps, from.y + ((to.y - from.y) * i) / steps, { button: 'left', buttons: 1 })
+    await sleep(16)
+  }
+  await sleep(60)
+  if (release) {
+    await mouse('mouseReleased', to.x, to.y, { button: 'left', clickCount: 1 })
+    await sleep(60)
+  }
+}
 async function clickFile(p, name) {
   await clickSel(p, `.file[title="${name}"] span`)
   await sleep(60)
@@ -178,10 +205,12 @@ const settle = (ms = 80) => sleep(ms)
 // Pausa maior que o captureTimeout: o próximo trecho vira um passo próprio de desfazer.
 const newStep = () => sleep(480)
 
-async function shot(name) {
+// Com `frame`, só aquele integrante sai na imagem.
+async function shot(name, frame) {
   if (!SHOTS) return
   mkdirSync(SHOTS, { recursive: true })
-  const { data } = await page.send('Page.captureScreenshot', { format: 'png' })
+  const clip = frame && (await ev(`(() => { const r = document.getElementById('${frame}').getBoundingClientRect(); return { x: r.left, y: r.top, width: r.width, height: r.height, scale: 1 } })()`))
+  const { data } = await page.send('Page.captureScreenshot', { format: 'png', ...(clip ? { clip } : {}) })
   writeFileSync(join(SHOTS, `${name}.png`), Buffer.from(data, 'base64'))
 }
 
@@ -676,6 +705,136 @@ async function run() {
   const back = await t('a', `({ shared: w.__shared, notice: !!document.querySelector('.exam-notice') })`)
   check('compartilhar de novo pelo aviso volta ao normal', back.shared === 1 && !back.notice, back)
 
+  // ---- blocos: recolher, redimensionar e arrastar, sem tirar o foco do editor
+  await clickSel('a', '.exam-tab:nth-child(1)')
+  await settle(300)
+  const blocks = () => t('a', `Object.fromEntries([...document.querySelectorAll('[data-block]')].map((e) => { const r = e.getBoundingClientRect(); return [e.dataset.block, { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height), strip: e.dataset.strip ?? null }] }))`)
+  const overlaps = (bl) => Object.values(bl).some((a, i, all) => all.some((b, j) => j > i && Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x) > 1 && Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y) > 1))
+  const settled = () => sleep(320)
+  const frameA = await frameOrigin('a')
+  const inA = (bl, id, fx, fy) => ({ x: frameA.x + bl[id].x + bl[id].w * fx, y: frameA.y + bl[id].y + bl[id].h * fy })
+  const head = (id) => `[data-block="${id}"] .blk-title`
+  const choose = async (text) => {
+    await sleep(120)
+    const ok = await t('a', `(() => { const b = [...document.querySelectorAll('.popover:not([inert]) .popover-row')].find((e) => e.textContent.trim() === ${JSON.stringify(text)}); b?.click(); return !!b })()`)
+    await settled()
+    return ok
+  }
+  await t('a', `w.localStorage.removeItem('oblita.blocks.TESTE.code')`)
+  await clickSel('a', '.blk-layout-menu')
+  await choose('Restaurar layout padrão')
+  const initial = await blocks()
+  check('quatro blocos lado a lado, sem sobrepor', Object.keys(initial).sort().join() === 'editor,input,output,statement' && !overlaps(initial), initial)
+  await shot('blocos-01-padrao', 'a')
+
+  await clickSel('a', '[data-block="statement"] .blk-toggle')
+  await settled()
+  let bl = await blocks()
+  check('recolher vira uma faixa fina e o vizinho ocupa o lugar', bl.statement.strip === 'v' && bl.statement.w === 40 && bl.editor.x < initial.editor.x && !overlaps(bl), bl)
+  await shot('blocos-02-recolhido', 'a')
+  await click(inA(bl, 'statement', 0.5, 0.5).x, inA(bl, 'statement', 0.5, 0.5).y)
+  await settled()
+  bl = await blocks()
+  check('clicar na faixa abre de novo', bl.statement.strip === null && bl.statement.w === initial.statement.w, bl)
+
+  const inputHead = await centerOf('a', head('input'))
+  await dblClick(inputHead.x, inputHead.y)
+  await settled()
+  bl = await blocks()
+  check('duplo clique no cabeçalho recolhe', bl.input.strip === 'v', bl)
+  await clickSel('a', '[data-block="input"] .blk-toggle')
+  await settled()
+
+  for (const id of ['statement', 'input', 'output']) await clickSel('a', `[data-block="${id}"] .blk-toggle`)
+  await settled()
+  const lastOpen = await t('a', `({ disabled: document.querySelector('[data-block="editor"] .blk-toggle').disabled, open: document.querySelectorAll('[data-block]:not([data-strip])').length })`)
+  check('o último bloco aberto não recolhe', lastOpen.disabled === true && lastOpen.open === 1, lastOpen)
+  await clickSel('a', '.blk-layout-menu')
+  await choose('Restaurar layout padrão')
+  check('restaurar o layout padrão volta tudo', JSON.stringify(await blocks()) === JSON.stringify(initial), await blocks())
+
+  // Seleção no editor antes de arrastar: ela tem de sobreviver ao arrasto.
+  await t('a', `(() => { w.__ed = t.editor(); t.editor().focus(); t.editor().setSelection(new t.monaco.Selection(1, 1, 2, 4)) })()`)
+  const outHead = await centerOf('a', head('output'))
+  const below = inA(initial, 'statement', 0.5, 0.88)
+  await dragTo(outHead, below, { release: false })
+  // A prévia desliza de um destino para o outro: espera ela parar.
+  await sleep(250)
+  const preview = await t('a', `(() => { const p = document.querySelector('.blk-preview'); if (!p) return null; const r = p.getBoundingClientRect(); return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height), drag: document.documentElement.hasAttribute('data-blk-drag') } })()`)
+  check('arrastando: prévia do destino embaixo do enunciado', !!preview && preview.drag && Math.abs(preview.x - initial.statement.x) < 2 && preview.y > initial.statement.y + 100 && Math.abs(preview.w - initial.statement.w) < 2, preview)
+  await shot('blocos-03-arrastando', 'a')
+  await mouse('mouseReleased', below.x, below.y, { button: 'left', clickCount: 1 })
+  await settled()
+  bl = await blocks()
+  check('soltar embaixo divide a coluna', Math.abs(bl.output.x - bl.statement.x) < 2 && bl.output.y > bl.statement.y + bl.statement.h - 1 && bl.output.w === bl.statement.w && !overlaps(bl), bl)
+  // A única seleção na página é a do editor (o Chrome mostra a do textarea dele em getSelection).
+  const focus = await t('a', `({ same: w.__ed === t.editor(), focus: t.editor().hasTextFocus(), sel: t.editor().getSelection().toString(), text: w.getSelection().toString(), inEditor: t.editor().getModel().getValueInRange(t.editor().getSelection()), drag: document.documentElement.hasAttribute('data-blk-drag'), preview: !!document.querySelector('.blk-preview') })`)
+  check('o editor continua o mesmo, com foco e seleção, sem texto selecionado na página', focus.same && focus.focus && focus.sel === '[1,1 -> 2,4]' && (focus.text === '' || focus.text === focus.inEditor) && !focus.drag && !focus.preview, focus)
+  await shot('blocos-04-movido-embaixo', 'a')
+  const saved = await t('a', `w.localStorage.getItem('oblita.blocks.TESTE.code')`)
+  check('o layout fica guardado por prova', !!saved && JSON.parse(saved).v === 1 && /output/.test(saved), saved)
+
+  const moved = await blocks()
+  const upper = inA(moved, 'statement', 0.5, 0.2)
+  await dragTo(await centerOf('a', head('editor')), upper, { release: false })
+  await press('Escape', 0, 'Escape', 27)
+  const escaped = await t('a', `({ preview: !!document.querySelector('.blk-preview'), drag: document.documentElement.hasAttribute('data-blk-drag') })`)
+  await mouse('mouseReleased', upper.x, upper.y, { button: 'left', clickCount: 1 })
+  await settled()
+  check('Esc cancela o arrasto', !escaped.preview && !escaped.drag && JSON.stringify(await blocks()) === JSON.stringify(moved), escaped)
+
+  await dragTo(await centerOf('a', head('editor')), { x: frameA.x + 400, y: frameA.y + 8 })
+  await settled()
+  check('soltar fora da área cancela', JSON.stringify(await blocks()) === JSON.stringify(moved), await blocks())
+  await dragTo(await centerOf('a', head('editor')), { x: frameA.x + 1300, y: frameA.y + 300 })
+  await settled()
+  const outside = await t('a', `({ drag: document.documentElement.hasAttribute('data-blk-drag'), dragging: document.querySelectorAll('[data-dragging]').length })`)
+  check('soltar fora da janela cancela e não deixa estado preso', JSON.stringify(await blocks()) === JSON.stringify(moved) && !outside.drag && outside.dragging === 0, outside)
+
+  await clickSel('a', '[data-block="statement"] .blk-menu')
+  const swapped = await choose('Trocar com Código')
+  bl = await blocks()
+  check('pelo teclado: menu do bloco troca com outro', swapped && bl.statement.x === moved.editor.x && bl.editor.x === moved.statement.x && bl.editor.w === moved.statement.w, bl)
+  await clickSel('a', '[data-block="input"] .blk-menu')
+  await sleep(120)
+  const focusedItem = await t('a', `document.activeElement?.classList.contains('popover-row')`)
+  await choose('Mover para baixo')
+  const nudged = await blocks()
+  // A entrada já estava embaixo na coluna dela: vai para baixo de tudo, de ponta a ponta.
+  check('pelo teclado: o menu recebe o foco e move para baixo', focusedItem && nudged.input.w > bl.input.w + 100 &&nudged.input.y >= bl.input.y - 1 && !overlaps(nudged), { focusedItem, before: bl.input, after: nudged.input })
+  await clickSel('a', '.blk-layout-menu')
+  await choose('Restaurar layout padrão')
+
+  const divider = await centerOf('a', '[data-divider=":0"]')
+  await dragTo(divider, { x: divider.x + 100, y: divider.y })
+  await settled()
+  bl = await blocks()
+  check('a divisória redimensiona os dois vizinhos', Math.abs(bl.statement.w - initial.statement.w - 100) <= 2 && Math.abs(bl.editor.x - initial.editor.x - 100) <= 2, bl)
+  await dragTo(await centerOf('a', '[data-divider=":0"]'), { x: frameA.x + 5000, y: divider.y })
+  await settled()
+  const widest = await blocks()
+  check('e para no limite dos blocos', widest.statement.w <= 560 && widest.editor.w >= 300, widest)
+  const d2 = await centerOf('a', '[data-divider=":0"]')
+  await dblClick(d2.x, d2.y)
+  await settled()
+  check('duplo clique na divisória volta ao tamanho padrão', (await blocks()).statement.w === initial.statement.w, await blocks())
+  await t('a', `document.querySelector('[data-divider=":0"]').focus()`)
+  await press('ArrowRight', 0, 'ArrowRight', 39)
+  await settled()
+  check('divisória pelo teclado: setas', (await blocks()).statement.w === initial.statement.w + 16, await blocks())
+  await press('Enter', 0, 'Enter', 13)
+  await settled()
+
+  await t('a', `w.localStorage.setItem('oblita.blocks.TESTE.code', '{"v":1,"root":{"type":"block","id":"velho"},"collapsed":[]}')`)
+  await clickSel('a', '.exam-tab:nth-child(4)')
+  await settle(200)
+  const textBlocks = await blocks()
+  check('questão de texto: enunciado e resposta como blocos', Object.keys(textBlocks).sort().join() === 'answer,statement', textBlocks)
+  await clickSel('a', '.exam-tab:nth-child(1)')
+  await settle(300)
+  check('layout salvo inválido cai no padrão', JSON.stringify(await blocks()) === JSON.stringify(initial), await blocks())
+  await t('a', `w.localStorage.removeItem('oblita.blocks.TESTE.code')`)
+
   // ---- tela estreita
   const widths = [[900, 640], [560, 700]]
   for (const [width, height] of widths) {
@@ -684,7 +843,7 @@ async function run() {
     const box = await t('a', `(() => {
       const m = document.querySelector('.editor-mount').getBoundingClientRect()
       const e = document.querySelector('.exam')
-      return { mount: m.height, width: m.width, st: document.querySelector('.exam-statement').getBoundingClientRect().height, scrolls: e.scrollHeight > e.clientHeight, horizontal: e.scrollWidth > e.clientWidth, consoleH: document.querySelector('.console').getBoundingClientRect().height }
+      return { mount: m.height, width: m.width, st: document.querySelector('.exam-statement').getBoundingClientRect().height, scrolls: e.scrollHeight > e.clientHeight, horizontal: e.scrollWidth > e.clientWidth, consoleH: document.querySelector('[data-block="output"]').getBoundingClientRect().height }
     })()`)
     check(`em ${width}x${height} o editor não colapsa`, box.mount >= 300 && box.width >= 200 && box.st >= 100 && box.consoleH >= 200 && !box.horizontal, box)
     await shot(`05-estreita-${width}`)
