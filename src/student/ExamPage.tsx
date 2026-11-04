@@ -1,10 +1,12 @@
-import { Check, Copy, Lock, LoaderCircle, Maximize, MonitorUp, Send, WifiOff, X } from 'lucide-react'
+import { Check, Copy, HardDrive, Lock, LoaderCircle, Maximize, MonitorOff, MonitorUp, RefreshCw, Send, WifiOff, X } from 'lucide-react'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import type { ChoiceQuestion, Question, TextQuestion } from '../../shared/exam'
+import { switchBuild, versionFix, type VersionFix } from '../lib/offline'
 import { formatClock, useObservable } from '../lib/store'
 import type { ConnectError } from '../net/link'
+import { BuildVersion } from '../ui/BuildVersion'
 import { DiaTextReveal } from '../ui/DiaTextReveal'
 import { Field, Logo, Markdown, Modal, Pill, Segmented, browserIssue, useTick } from '../ui/kit'
 // Importado direto, não sob demanda: o editor precisa já estar carregado antes de a internet ser cortada.
@@ -32,7 +34,7 @@ const REFUSED: Record<string, string> = {
   'password-required': 'Esta sala tem senha. Digite para entrar',
   password: 'Senha incorreta',
   identity: 'Esta vaga já está em uso por outro computador',
-  version: 'Sua página está em outra versão. Recarregue e tente de novo.',
+  version: 'Sua página está em outra versão que a do professor.',
   ended: 'Esta prova já terminou.',
   full: 'A sala está cheia',
 }
@@ -59,16 +61,19 @@ const Brand = () => (
 
 type Fix = 'extended' | 'screen' | 'fullscreen' | 'network'
 
-function nextFix(): Fix | null {
+// Na prova, a tela que caiu não bloqueia: vira um aviso fixo (ShareNotice). Antes dela, é obrigatória.
+function nextFix(inExam = false): Fix | null {
   const st = session.status
   if (st.extended || session.extended()) return 'extended'
-  if (!st.screen) return 'screen'
+  if (!st.screen && !inExam) return 'screen'
   if (!st.fullscreen) return 'fullscreen'
   if (session.config?.requireIsolation && st.isolated !== true) return 'network'
   return null
 }
 
 let restoring: Promise<unknown> | null = null
+// Trocar de versão recarrega a página de propósito: o aviso de sair não pode atrapalhar.
+let leaving = false
 
 export default function ExamPage() {
   const s = useObservable(session)
@@ -89,7 +94,9 @@ export default function ExamPage() {
   const guarding = !!s.saved?.exam && s.saved.active && (!finished || s.pendingUploads() > 0)
   useEffect(() => {
     if (!guarding) return
-    const warn = (e: BeforeUnloadEvent) => e.preventDefault()
+    const warn = (e: BeforeUnloadEvent) => {
+      if (!leaving) e.preventDefault()
+    }
     window.addEventListener('beforeunload', warn)
     return () => window.removeEventListener('beforeunload', warn)
   }, [guarding])
@@ -176,6 +183,7 @@ function ConnectStep() {
   }
 
   const error = s.refused ? (REFUSED[s.refused] ?? 'O professor recusou a conexão.') : s.connectError ? CONNECT_ERROR[s.connectError] : null
+  const [switched] = useState(readSwitched)
 
   return (
     <div className="center-screen">
@@ -216,14 +224,68 @@ function ConnectStep() {
                 <input className="input" type="password" autoFocus autoComplete="off" value={password} onChange={(e) => setPassword(e.target.value)} />
               </Field>
             )}
+            {switched && !error && <div className="infobox" role="status">Esta página voltou para a versão {switched}, a mesma do professor. Entre de novo.</div>}
             {error && <div className="errbox" role="alert">{error}</div>}
+            {s.refused === 'version' && s.teacherProtocol !== null && <VersionFixBox protocol={s.teacherProtocol} auto />}
             <Pill type="submit" tone="primary" size="lg" disabled={!complete || busy}>
               {entering && <LoaderCircle size={16} className="spin" />}
               {entering ? 'Entrando…' : 'Entrar'}
             </Pill>
           </>
         )}
+        <BuildVersion />
       </form>
+    </div>
+  )
+}
+
+function readSwitched() {
+  try {
+    const raw = sessionStorage.getItem('oblita-switched')
+    sessionStorage.removeItem('oblita-switched')
+    return raw ? (JSON.parse(raw).to as string) : null
+  } catch {
+    return null
+  }
+}
+
+// O professor fala outro protocolo. Se houver em cache uma versão que fale o dele, a página passa a
+// usá-la (sozinha antes da prova; com um clique durante ela, porque recarrega). Senão, diz quem atualiza.
+function VersionFixBox({ protocol, auto }: { protocol: number; auto?: boolean }) {
+  const [fix, setFix] = useState<VersionFix | null>(null)
+  const [switching, setSwitching] = useState(false)
+  useEffect(() => {
+    let alive = true
+    void versionFix(protocol).then((f) => {
+      if (!alive) return
+      setFix(f)
+      if (auto && f.kind === 'switch') go(f)
+    })
+    return () => {
+      alive = false
+    }
+  }, [protocol, auto])
+  const go = (f: VersionFix) => {
+    if (f.kind !== 'switch') return
+    setSwitching(true)
+    leaving = true
+    void switchBuild(f.build).then((ok) => {
+      if (ok) return
+      leaving = false
+      setSwitching(false)
+    })
+  }
+  if (!fix) return null
+  if (fix.kind === 'update') return <div className="infobox">O professor está numa versão mais nova. Abra esta página com internet uma vez para atualizar.</div>
+  if (fix.kind === 'teacher-old') return <div className="infobox">O professor está numa versão mais antiga, que esta página não tem guardada. Peça para ele atualizar o painel.</div>
+  return (
+    <div className="infobox row">
+      <span className="grow">{switching ? `Trocando para a versão ${fix.build.build}…` : `Há uma versão guardada que fala com o professor: ${fix.build.build}.`}</span>
+      {!switching && (
+        <Pill size="sm" tone="primary" onClick={() => go(fix)}>
+          <RefreshCw size={14} /> Usar
+        </Pill>
+      )}
     </div>
   )
 }
@@ -605,7 +667,7 @@ function ExamRoom() {
     setRevealing(fresh)
   }, [exam, manual])
 
-  const locked = !s.ready
+  const locked = !!nextFix(true)
   const hand = async () => {
     setSending(true)
     try {
@@ -626,6 +688,7 @@ function ExamRoom() {
           <i className={s.linkState === 'online' ? 'dot on' : 'dot off'} title={s.linkState === 'online' ? 'Conectado ao professor' : 'Sem conexão com o professor'} />
           {s.teacherFp && <span className="badge fp-chip" title="Código do professor" aria-label={`Código do professor: ${s.teacherFp}`}>{s.teacherFp}</span>}
           <SaveState />
+          <BuildVersion />
           <Clock questionId={question?.id} />
           {question && (
             <Pill tone="brand" onClick={() => setConfirming(true)}>
@@ -668,6 +731,7 @@ function ExamRoom() {
           </Pill>
         </div>
       </Modal>
+      <ExamNotices />
       {manual && <RevealOverlay question={revealing} onDone={() => setRevealing(null)} />}
       {locked && <LockOverlay />}
       {/* Fora de .exam: ela some enquanto a prova está bloqueada, e o selo precisa continuar na tela. */}
@@ -802,9 +866,53 @@ function TextAnswer({ question }: { question: TextQuestion }) {
   )
 }
 
+// Avisos que não travam nada: a prova segue editável por baixo deles.
+function ExamNotices() {
+  const s = session
+  const [busy, setBusy] = useState(false)
+  const share = async () => {
+    setBusy(true)
+    try {
+      await s.shareScreen()
+    } finally {
+      setBusy(false)
+    }
+  }
+  const items = []
+  if (!s.status.screen) {
+    items.push(
+      <div key="screen" className="exam-notice" role="alert">
+        <MonitorOff size={16} />
+        <span className="grow">{s.screenError ? 'Escolha "Tela inteira" e compartilhe de novo.' : 'A tela parou de ser compartilhada. O professor foi avisado.'}</span>
+        <Pill size="sm" tone="primary" disabled={busy} onClick={() => void share()}>
+          <MonitorUp size={14} /> Compartilhar de novo
+        </Pill>
+      </div>,
+    )
+  }
+  if (s.diskError) {
+    items.push(
+      <div key="disk" className="exam-notice" role="alert">
+        <HardDrive size={16} />
+        <span className="grow">O disco deste computador não está gravando. A prova continua, mas não recarregue a página.</span>
+      </div>,
+    )
+  }
+  if (s.teacherProtocol !== null) {
+    items.push(
+      <div key="version" className="exam-notice" role="alert">
+        <span className="grow">O professor mudou de versão e esta página não conecta mais com ele.</span>
+        <VersionFixBox protocol={s.teacherProtocol} />
+      </div>,
+    )
+  }
+  if (!items.length) return null
+  return <div className="exam-notices">{items}</div>
+}
+
 function LockOverlay() {
   useTick(1000)
-  const fix = nextFix()
+  const fix = nextFix(true)
   return (
     <div className="lock-screen" role="alertdialog" aria-modal="true" aria-label="Prova bloqueada">
       <div className="gate" key={fix ?? 'none'}>

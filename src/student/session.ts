@@ -1,10 +1,11 @@
 // Sessão do aluno, fora do React: sobrevive a re-renderização e é restaurada depois de um F5.
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from 'y-protocols/awareness'
-import { decodeFrame, encodeBinary, encodeJson } from '../../shared/frames'
+import { decodeFrame, deflateFrame, encodeBinary, encodeJson, inflate, inflateFrame } from '../../shared/frames'
 import { isOpen, type QuestionClocks } from '../../shared/flow'
 import { SEALED_TAG, SecureChannel, deriveRoomKey, fingerprint, fromB64, helloTranscript, newEphemeral, sha256Hex, toB64, tokenProof, verifyHello } from '../../shared/secure'
-import type { Exam } from '../../shared/exam'
+import type { Exam, Question } from '../../shared/exam'
 import {
+  MAX_INFLATED_TO_STUDENT,
   PROTOCOL_VERSION,
   RUN_LIMITS,
   TEST_INTERVAL_MS,
@@ -25,7 +26,8 @@ import { idb, requestPersistence } from '../lib/idb'
 import { Observable, randomId } from '../lib/store'
 import { LinkError, connectHub, connectRtc, type ConnectError, type Link } from '../net/link'
 import { ExamDoc } from '../collab/examDoc'
-import { compile, run } from '../compiler/client'
+import { compile, run, type CompileResult } from '../compiler/client'
+import { BUILD, pinBuild, unpinBuild } from '../lib/offline'
 import { Proctor, enterFullscreen, isExtendedDisplay, requestScreen } from './proctor'
 import { FrameGrabber, ScreenRecorder, type RecPart } from './recorder'
 
@@ -103,7 +105,15 @@ export class StudentSession extends Observable {
   awareness = new Awareness(this.doc.doc)
   resumed = false
   testing = false
-  testReport: Exclude<TestReport, { status: 'queued' | 'limited' }> | null = null
+  testReport: Extract<TestReport, { status: 'compile-error' | 'done' }> | null = null
+  // Onde está o teste: compilando aqui, na fila do professor (com a posição) ou rodando lá.
+  testStage: 'compiling' | 'queued' | null = null
+  testPosition: number | null = null
+  testNotice: string | null = null
+  // Protocolo do professor quando ele fala outro: a página oferece a versão em cache que fala o dele.
+  teacherProtocol: number | null = null
+  // O disco recusou gravar (cheio ou bloqueado). A prova segue, mas um F5 pode perder o que não saiu.
+  diskError = false
   nextTestAt = 0
   running = false
   runOutput: RunOutput | null = null
@@ -133,6 +143,16 @@ export class StudentSession extends Observable {
   private welcomed = false
   private closing = false
   private chain: Promise<unknown> = Promise.resolve()
+  // Comprimir e descomprimir são assíncronos: as filas mantêm a ordem dos quadros de cada conexão.
+  private outChain: Promise<unknown> = Promise.resolve()
+  private inChain: Promise<unknown> = Promise.resolve()
+  // Questões retiradas nesta conexão: se voltarem, o professor manda só o id.
+  private stash = new Map<string, Question>()
+  // Pedaços de gravação que o disco recusou ficam aqui até o professor confirmar, com teto.
+  private memChunks = new Map<string, Blob>()
+  private memBytes = 0
+  private nextSegment = 0
+  private pendingTest: string | null = null
 
   constructor() {
     super()
@@ -228,7 +248,7 @@ export class StudentSession extends Observable {
   async begin(via: Via, roomCode: string, name: string, enrollment?: string, _groupId?: string, password = '') {
     await requestPersistence()
     // Mesma máquina volta como o mesmo aluno, mesmo depois de ser recusada ou recarregar.
-    const previous = this.saved ?? (await idb.get<Saved>('kv', 'student'))
+    const previous = this.saved ?? (await idb.get<Saved>('kv', 'student').catch(() => undefined))
     this.password = password
     this.needsPassword = false
     // Quem foi recusado pode tentar de novo com outro código sem recarregar a página.
@@ -300,6 +320,9 @@ export class StudentSession extends Observable {
     this.channel = null
     this.transcript = null
     this.awaitingWelcome = false
+    this.outChain = Promise.resolve()
+    this.inChain = Promise.resolve()
+    this.stash.clear()
     this.linkState = 'online'
     this.connectError = null
     this.changed()
@@ -307,7 +330,12 @@ export class StudentSession extends Observable {
 
   // A resposta destes pedidos vinha pela conexão que caiu: sem isto os botões ficariam presos.
   private abandonRemoteJobs() {
-    this.testing = false
+    if (this.testStage === 'queued') {
+      this.testing = false
+      this.testStage = null
+      this.testPosition = null
+      this.pendingTest = null
+    }
     if (this.running && this.runOutput?.where === 'host') {
       this.running = false
       this.runOutput = { ...this.runOutput, state: 'done', error: 'A conexão com o professor caiu' }
@@ -335,17 +363,21 @@ export class StudentSession extends Observable {
   }
 
   // Nada sai em claro: a ordem é a do canal, e sem canal a mensagem é descartada.
-  private sendSealed(frame: Uint8Array<ArrayBuffer>) {
+  // Vídeo e imagem já vêm comprimidos: quem manda esses passa `compress = false`.
+  private sendSealed(frame: Uint8Array<ArrayBuffer>, compress = true) {
     const link = this.link
     const channel = this.channel
     if (!link || !channel) return
-    void channel
-      .then((c) => c.seal(frame))
-      .then(
+    const packed = compress ? deflateFrame(frame) : Promise.resolve(frame)
+    this.outChain = this.outChain
+      .then(async () => {
+        const sealed = await (await channel).seal(await packed)
         // Cifrado com uma chave que já foi trocada, o quadro não abriria do outro lado.
-        (sealed) => this.link === link && this.channel === channel && link.send(sealed),
-        () => link.close(),
-      )
+        if (this.link === link && this.channel === channel) link.send(sealed)
+      })
+      .catch(() => {
+        if (this.link === link) link.close()
+      })
   }
 
   private send(msg: StudentMsg) {
@@ -357,12 +389,25 @@ export class StudentSession extends Observable {
     if (frame[0] !== SEALED_TAG) return void this.onPlain(frame)
     const channel = this.channel
     if (!channel) return
-    void channel
-      .then((c) => c.open(frame))
-      .then(
-        (plain) => this.link === link && this.onMessage(plain),
-        () => link?.close(),
-      )
+    this.inChain = this.inChain
+      .then(async () => {
+        let plain: Uint8Array
+        try {
+          plain = await (await channel).open(frame)
+        } catch {
+          return link?.close()
+        }
+        if (this.link !== link) return
+        let opened: Uint8Array
+        try {
+          opened = await inflateFrame(plain, MAX_INFLATED_TO_STUDENT)
+        } catch {
+          // Quadro que não abre não derruba nada: é só ignorado.
+          return
+        }
+        if (this.link === link) await this.onMessage(opened)
+      })
+      .catch((err) => console.error('mensagem do professor ignorada', err))
   }
 
   private async onPlain(frame: Uint8Array) {
@@ -413,7 +458,12 @@ export class StudentSession extends Observable {
     const link = this.link
     if (!s || !link) return
     // Vem antes da assinatura: quem já entrou não pode ser derrubado por um hi em claro de qualquer um.
-    if (hi.v !== PROTOCOL_VERSION) return this.welcomed ? undefined : this.refuse('version')
+    if (hi.v !== PROTOCOL_VERSION) {
+      this.teacherProtocol = Number.isSafeInteger(hi.v) ? hi.v : null
+      this.changed()
+      return this.welcomed ? undefined : this.refuse('version')
+    }
+    this.teacherProtocol = null
     const transcript = helloTranscript(hi.code, hi.salt, hi.nonce, hi.pub)
     let valid = false
     try {
@@ -480,11 +530,18 @@ export class StudentSession extends Observable {
     this.team = null
     this.resetDoc()
     this.setIdentity()
-    await Promise.all((await idb.keys('outbox')).map((key) => idb.del('outbox', key)))
-    await Promise.all((await idb.keys('chunks')).map((key) => idb.del('chunks', key)))
+    this.memChunks.clear()
+    this.memBytes = 0
+    try {
+      await Promise.all((await idb.keys('outbox')).map((key) => idb.del('outbox', key)))
+      await Promise.all((await idb.keys('chunks')).map((key) => idb.del('chunks', key)))
+    } catch {
+      this.diskError = true
+    }
   }
 
-  private onMessage(frame: Uint8Array) {
+  // Mensagem malformada do professor (ou de quem estiver no lugar dele) é ignorada, nunca lança.
+  private async onMessage(frame: Uint8Array) {
     let decoded
     try {
       decoded = decodeFrame<TeacherMsg>(frame)
@@ -492,6 +549,15 @@ export class StudentSession extends Observable {
       return
     }
     const { json: msg, bytes } = decoded
+    if (!msg || typeof msg !== 'object' || typeof msg.t !== 'string') return
+    try {
+      await this.handle(msg, bytes)
+    } catch (err) {
+      console.error('mensagem do professor ignorada', msg.t, err)
+    }
+  }
+
+  private async handle(msg: TeacherMsg, bytes?: Uint8Array) {
     switch (msg.t) {
       case 'refused':
         this.refuse(msg.reason)
@@ -499,16 +565,28 @@ export class StudentSession extends Observable {
       case 'welcome':
         this.onWelcome(msg)
         break
-      case 'exam':
-        if (this.saved) {
-          this.saved.exam = msg.exam
-          this.saved.endsAt = msg.endsAt ?? undefined
-          this.saved.clocks = msg.clocks
-          if (!this.clockAt) this.saved.clockOffset = msg.now - Date.now()
-          void this.persist()
-        }
+      case 'exam': {
+        if (!this.saved || !bytes) return
+        const exam = safeExam(JSON.parse(new TextDecoder().decode(await inflate(bytes, MAX_INFLATED_TO_STUDENT))))
+        if (!exam) return
+        if (!this.saved.exam) void pinBuild(BUILD.id, 'exam')
+        this.saved.exam = exam
+        this.saved.endsAt = typeof msg.endsAt === 'number' ? msg.endsAt : undefined
+        this.saved.clocks = safeClocks(msg.clocks)
+        if (!this.clockAt && typeof msg.now === 'number') this.saved.clockOffset = msg.now - Date.now()
+        this.stash.clear()
+        void this.persist()
         this.phase = 'running'
         this.syncDoc()
+        break
+      }
+      case 'questions':
+        this.onQuestions(msg)
+        break
+      case 'clocks':
+        if (!this.saved) return
+        this.saved.clocks = safeClocks(msg.clocks)
+        void this.persist()
         break
       case 'clock':
         if (this.saved) this.saved.endsAt = msg.endsAt
@@ -575,7 +653,31 @@ export class StudentSession extends Observable {
         this.onTestResult(msg.result)
         break
     }
-    this.changed()
+  }
+
+  // Liberar e retirar chegam como diferença. Se faltar o que restaurar, reconecta para receber tudo.
+  private onQuestions(msg: Extract<TeacherMsg, { t: 'questions' }>) {
+    const s = this.saved
+    if (!s?.exam) return
+    const current = new Map(s.exam.questions.map((q) => [q.id, q]))
+    for (const id of Array.isArray(msg.remove) ? msg.remove : []) {
+      const q = current.get(id)
+      if (!q) continue
+      this.stash.set(id, q)
+      current.delete(id)
+    }
+    for (const id of Array.isArray(msg.restore) ? msg.restore : []) {
+      const q = this.stash.get(id)
+      if (!q) return void this.link?.close()
+      current.set(id, q)
+    }
+    for (const q of Array.isArray(msg.add) ? msg.add : []) if (safeQuestion(q)) current.set(q.id, q)
+    const order = Array.isArray(msg.order) ? msg.order.filter((id) => current.has(id)) : [...current.keys()]
+    s.exam = { ...s.exam, questions: order.map((id) => current.get(id)!) }
+    s.clocks = safeClocks(msg.clocks)
+    void this.persist()
+    // Questão nova traz o código inicial no documento do professor: pede o que falta.
+    if ((msg.add?.length ?? 0) + (msg.restore?.length ?? 0) > 0) this.syncDoc()
   }
 
   // Movido pelo professor com a prova aberta: o documento antigo é da outra equipe e não pode ir junto.
@@ -648,9 +750,13 @@ export class StudentSession extends Observable {
     if (!this.grabber || this.beaconCode !== code) return
     const el = document.querySelector('[data-beacon]')
     if (!el) return
-    const blob = await this.grabber.cropRegion(el.getBoundingClientRect())
-    if (!blob) return
-    this.sendSealed(encodeBinary({ t: 'beacon-frame', code } satisfies StudentMsg, new Uint8Array(await blob.arrayBuffer())))
+    try {
+      const blob = await this.grabber?.cropRegion(el.getBoundingClientRect())
+      if (!blob) return
+      this.sendSealed(encodeBinary({ t: 'beacon-frame', code } satisfies StudentMsg, new Uint8Array(await blob.arrayBuffer())), false)
+    } catch {
+      // Sem tela no meio do recorte: o professor só deixa de receber este selo.
+    }
   }
 
   private startLoops() {
@@ -685,6 +791,8 @@ export class StudentSession extends Observable {
     this.grabber?.dispose()
     this.grabber = new FrameGrabber(result.stream)
     this.proctor.setStream(result.stream)
+    const stream = result.stream
+    stream.getVideoTracks()[0]?.addEventListener('ended', () => this.stream === stream && this.onShareEnded())
     if (!this.proctorStarted) {
       this.proctorStarted = true
       this.proctor.start()
@@ -695,6 +803,18 @@ export class StudentSession extends Observable {
   }
 
   private proctorStarted = false
+
+  // A tela caiu: o proctor já mandou o alerta. Aqui só para o que dependia dela, sem travar a prova,
+  // e o próximo compartilhamento retoma gravação, miniatura e selo.
+  private onShareEnded() {
+    if (this.recorder) this.nextSegment = Math.max(this.nextSegment, this.recorder.nextSegment)
+    this.recorder?.stop()
+    this.recorder = null
+    this.grabber?.dispose()
+    this.grabber = null
+    this.stream = null
+    this.onStatus(this.proctor.status())
+  }
 
   async goFullscreen() {
     await enterFullscreen()
@@ -712,9 +832,10 @@ export class StudentSession extends Observable {
 
   private startRecording() {
     if (!this.stream || !this.config?.recordScreen) return
+    if (this.recorder) this.nextSegment = Math.max(this.nextSegment, this.recorder.nextSegment)
     this.recorder?.stop()
-    this.recorder = new ScreenRecorder(this.stream, this.saved?.segment ?? 0, (part) => void this.enqueuePart(part))
-    this.recorder.start()
+    this.recorder = new ScreenRecorder(this.stream, Math.max(this.saved?.segment ?? 0, this.nextSegment), (part) => void this.enqueuePart(part))
+    void this.recorder.start().catch((err) => console.error('gravador não começou', err))
   }
 
   // ---- alertas: fila confiável própria, para nunca esperar atrás de um pedaço de vídeo
@@ -730,6 +851,8 @@ export class StudentSession extends Observable {
       const event: ProctorEvent = { seq, kind, at, detail, hash }
       await this.pushReliable({ t: 'event', event }, seq)
     })
+    // Uma falha aqui não pode travar a fila: os próximos alertas continuam saindo.
+    this.chain = this.chain.catch((err) => console.error('alerta não registrado', err))
     await this.chain
   }
 
@@ -737,7 +860,12 @@ export class StudentSession extends Observable {
     const item = { seq, msg }
     this.events.push(item)
     this.send(msg)
-    await idb.put('outbox', `e:${String(seq).padStart(9, '0')}`, item)
+    // Sem disco o item fica na memória e é reenviado ao reconectar; só um F5 o perderia.
+    try {
+      await idb.put('outbox', `e:${String(seq).padStart(9, '0')}`, item)
+    } catch {
+      this.diskError = true
+    }
     await this.persist()
   }
 
@@ -745,15 +873,14 @@ export class StudentSession extends Observable {
     if (stream === 'event') {
       const done = this.events.filter((e) => e.seq <= seq)
       this.events = this.events.filter((e) => e.seq > seq)
-      await Promise.all(done.map((e) => idb.del('outbox', `e:${String(e.seq).padStart(9, '0')}`)))
+      await Promise.all(done.map((e) => idb.del('outbox', `e:${String(e.seq).padStart(9, '0')}`))).catch(() => {})
     } else {
       this.lastRecAck = Math.max(this.lastRecAck, seq)
       const done = this.recQueue.filter((r) => r.seq <= seq)
       this.recQueue = this.recQueue.filter((r) => r.seq > seq)
       this.recInFlight = Math.max(0, this.recInFlight - done.length)
-      await Promise.all(
-        done.map((r) => Promise.all([idb.del('outbox', `r:${r.key}`), idb.del('chunks', r.key)])),
-      )
+      for (const r of done) this.forgetChunk(r.key)
+      await Promise.all(done.map((r) => Promise.all([idb.del('outbox', `r:${r.key}`), idb.del('chunks', r.key)]))).catch(() => {})
       void this.pumpRec()
     }
   }
@@ -767,9 +894,18 @@ export class StudentSession extends Observable {
     if (part.segment >= s.segment) s.segment = part.segment + 1
     const key = String(seq).padStart(9, '0')
     const { blob, ...meta } = part
-    await idb.put('chunks', key, blob)
     const entry = { seq, key, meta }
-    await idb.put('outbox', `r:${key}`, entry)
+    try {
+      await idb.put('chunks', key, blob)
+      await idb.put('outbox', `r:${key}`, entry)
+    } catch {
+      // Disco cheio ou bloqueado: segura na memória até o professor confirmar. Acima do teto,
+      // o pedaço se perde, e o professor vê o buraco na gravação.
+      this.diskError = true
+      if (this.memBytes + blob.size > MAX_MEM_CHUNKS) return
+      this.memChunks.set(key, blob)
+      this.memBytes += blob.size
+    }
     this.recQueue.push(entry)
     void this.persist()
     void this.pumpRec()
@@ -778,6 +914,13 @@ export class StudentSession extends Observable {
 
   private pumping = false
 
+  private forgetChunk(key: string) {
+    const blob = this.memChunks.get(key)
+    if (!blob) return
+    this.memChunks.delete(key)
+    this.memBytes -= blob.size
+  }
+
   private async pumpRec() {
     if (this.pumping) return
     this.pumping = true
@@ -785,7 +928,7 @@ export class StudentSession extends Observable {
       while (this.link && this.welcomed && this.recInFlight < REC_WINDOW) {
         const item = this.recQueue[this.recInFlight]
         if (!item) break
-        const blob = await idb.get<Blob>('chunks', item.key)
+        const blob = this.memChunks.get(item.key) ?? (await idb.get<Blob>('chunks', item.key).catch(() => undefined))
         if (!blob) {
           // Pedaço perdido no disco: avança para o professor não ficar esperando.
           this.recInFlight++
@@ -806,8 +949,11 @@ export class StudentSession extends Observable {
             } satisfies StudentMsg,
             bytes,
           ),
+          false,
         )
       }
+    } catch (err) {
+      console.error('envio da gravação parou', err)
     } finally {
       this.pumping = false
     }
@@ -815,10 +961,14 @@ export class StudentSession extends Observable {
 
   private async sendFrame() {
     if (!this.grabber || !this.link) return
-    const blob = await this.grabber.grab(this.focusOn ? 1280 : 320, this.focusOn ? 0.7 : 0.5)
-    if (!blob || !this.link || this.link.buffered() > 2_000_000) return
-    const bytes = new Uint8Array(await blob.arrayBuffer())
-    this.sendSealed(encodeBinary({ t: 'frame', at: Date.now(), focus: this.focusOn } satisfies StudentMsg, bytes))
+    try {
+      const blob = await this.grabber.grab(this.focusOn ? 1280 : 320, this.focusOn ? 0.7 : 0.5)
+      if (!blob || !this.link || this.link.buffered() > 2_000_000) return
+      const bytes = new Uint8Array(await blob.arrayBuffer())
+      this.sendSealed(encodeBinary({ t: 'frame', at: Date.now(), focus: this.focusOn } satisfies StudentMsg, bytes), false)
+    } catch {
+      // Miniatura é descartável.
+    }
   }
 
   // ---- respostas
@@ -861,13 +1011,47 @@ export class StudentSession extends Observable {
 
   // ---- teste: quem decide o limite é o professor; o contador aqui é só para mostrar
 
-  runTest(questionId: string) {
+  // Compila aqui, como o Rodar, e manda só o executável: o professor apenas roda. Erro de
+  // compilação aparece na hora e não gasta o minuto. Sem compilador aqui, vai o código, como antes.
+  async runTest(questionId: string) {
     const answer = this.answerOf(questionId)
     if (answer?.type !== 'code' || this.testing || Date.now() < this.nextTestAt) return
+    const reqId = randomId(6)
     this.testing = true
+    this.testStage = 'compiling'
+    this.testPosition = null
+    this.testNotice = null
     this.testReport = null
-    this.send({ t: 'test', reqId: randomId(6), questionId, lang: answer.lang, files: answer.files })
+    this.pendingTest = reqId
     this.changed()
+    let built: CompileResult | null = null
+    try {
+      built = await compile(answer.lang, answer.files)
+    } catch {
+      built = null
+    }
+    if (this.pendingTest !== reqId) return
+    if (built && !built.ok && !built.internal) {
+      this.endTest()
+      this.testReport = { reqId, questionId, status: 'compile-error', log: built.log, nextInMs: 0 }
+      return this.changed()
+    }
+    if (!this.link || !this.channel) {
+      this.endTest()
+      this.testNotice = 'Sem conexão com o professor. Tente de novo quando reconectar.'
+      return this.changed()
+    }
+    this.testStage = 'queued'
+    if (built?.ok) this.sendSealed(encodeBinary({ t: 'test-wasm', reqId, questionId, lang: answer.lang } satisfies StudentMsg, built.wasm))
+    else this.send({ t: 'test', reqId, questionId, lang: answer.lang, files: answer.files })
+    this.changed()
+  }
+
+  private endTest() {
+    this.testing = false
+    this.testStage = null
+    this.testPosition = null
+    this.pendingTest = null
   }
 
   // ---- rodar: primeiro aqui mesmo em WebAssembly; se não der, na máquina do professor
@@ -950,15 +1134,18 @@ export class StudentSession extends Observable {
   }
 
   private onTestResult(result: TestReport) {
+    if (!result || typeof result !== 'object' || (this.pendingTest && result.reqId !== this.pendingTest)) return
     if (result.status === 'queued') {
-      this.nextTestAt = Date.now() + TEST_INTERVAL_MS
+      if (this.pendingTest) this.testPosition = typeof result.position === 'number' && result.position > 0 ? result.position : null
       return
     }
-    this.testing = false
-    if (result.status === 'limited') this.nextTestAt = Date.now() + result.retryInMs
+    this.endTest()
+    if (result.status === 'limited') this.nextTestAt = Date.now() + Math.min(TEST_INTERVAL_MS, Math.max(0, result.retryInMs))
+    else if (result.status === 'busy') this.testNotice = 'Sua equipe já tem um teste na fila. Espere ele terminar.'
+    else if (result.status === 'invalid') this.testReport = { reqId: result.reqId, questionId: result.questionId, status: 'compile-error', log: `${result.log}\n`, nextInMs: 0 }
     else {
       this.testReport = result
-      this.nextTestAt = Date.now() + result.nextInMs
+      this.nextTestAt = Date.now() + Math.min(TEST_INTERVAL_MS, Math.max(0, result.nextInMs))
     }
   }
 
@@ -1026,17 +1213,48 @@ export class StudentSession extends Observable {
     this.resetDoc()
     this.runOutput = null
     this.testReport = null
+    this.endTest()
+    this.testNotice = null
+    this.teacherProtocol = null
+    this.memChunks.clear()
+    this.memBytes = 0
     this.nextTestAt = 0
+    // Saiu da prova: a próxima vez que abrir, abre a versão mais nova.
+    void unpinBuild()
     this.savedAt = 0
     this.changed()
   }
 
   private async persist() {
     if (!this.saved) return
-    await idb.put('kv', 'student', this.saved)
-    this.savedAt = Date.now()
+    try {
+      await idb.put('kv', 'student', this.saved)
+      this.savedAt = Date.now()
+      this.diskError = false
+    } catch {
+      this.diskError = true
+    }
     this.changed()
   }
+}
+
+const MAX_MEM_CHUNKS = 64 * 1024 * 1024
+const QUESTION_TYPES = new Set(['code', 'choice', 'text'])
+
+// O professor é confiável, mas um quadro torto não pode quebrar a tela: só a forma é conferida.
+function safeQuestion(q: unknown): q is Question {
+  const x = q as Question | null
+  return !!x && typeof x === 'object' && typeof x.id === 'string' && QUESTION_TYPES.has(x.type) && typeof x.title === 'string' && typeof x.statement === 'string'
+}
+
+function safeExam(raw: unknown): Exam | null {
+  const e = raw as Exam | null
+  if (!e || typeof e !== 'object' || typeof e.title !== 'string' || !Array.isArray(e.questions)) return null
+  return { ...e, questions: e.questions.filter(safeQuestion) }
+}
+
+function safeClocks(raw: unknown): QuestionClocks {
+  return raw && typeof raw === 'object' ? (raw as QuestionClocks) : {}
 }
 
 function bytesToB64(bytes: Uint8Array) {

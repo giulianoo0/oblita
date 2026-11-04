@@ -657,6 +657,25 @@ async function run() {
   await t('a', `(() => { t.session.status = t.OK; t.refresh() })()`)
   await sleep(200)
 
+  // ---- tela cai no meio da prova: avisa e segue editável
+  await t('a', `(() => { t.session.status = { ...t.OK, screen: false }; t.refresh() })()`)
+  await sleep(400)
+  const dropped = await t('a', `({ lock: !!document.querySelector('.lock-screen'), inert: document.querySelector('.exam').inert, notice: document.querySelector('.exam-notice')?.textContent ?? null, button: [...document.querySelectorAll('.exam-notice button')].map((b) => b.textContent).join() })`)
+  check('tela caiu na prova: sem tela de bloqueio', !dropped.lock && dropped.inert === false, dropped)
+  check('tela caiu na prova: aviso fixo com compartilhar de novo', /parou de ser compartilhada/.test(dropped.notice ?? '') && /Compartilhar de novo/.test(dropped.button), dropped)
+  await shot('04b-tela-caiu')
+  await t('a', `t.editor().focus()`)
+  await clickAt('a', 1, 1)
+  await type('z')
+  await settle()
+  check('tela caiu na prova: o editor continua editável', (await main('a')).startsWith('z'), await main('a'))
+  await t('a', `(() => { const y = t.session.doc.files('q1').get('main.cpp'); y.delete(0, 1) })()`)
+  await t('a', `(() => { w.__shared = 0; t.session.shareScreen = async () => { w.__shared++; t.session.status = t.OK; t.refresh(); return true } })()`)
+  await clickSel('a', '.exam-notice button')
+  await sleep(400)
+  const back = await t('a', `({ shared: w.__shared, notice: !!document.querySelector('.exam-notice') })`)
+  check('compartilhar de novo pelo aviso volta ao normal', back.shared === 1 && !back.notice, back)
+
   // ---- tela estreita
   const widths = [[900, 640], [560, 700]]
   for (const [width, height] of widths) {

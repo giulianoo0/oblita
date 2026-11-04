@@ -1,7 +1,8 @@
-import type { Exam, Lang } from './exam'
+import type { Lang, Question } from './exam'
 import type { Flow, QuestionClocks } from './flow'
 
-export const PROTOCOL_VERSION = 1
+// 2: quadro comprimido, prova por partes, teste com o executável do aluno.
+export const PROTOCOL_VERSION = 2
 export const HUB_ORIGINS = ['https://oblita.giuli.dev', 'http://localhost:5173', 'http://localhost:3000']
 export const HUB_PORT = 7787
 
@@ -128,6 +129,7 @@ export type StudentMsg =
   | { t: 'y-aware' }
   | { t: 'beacon-frame'; code: number }
   | { t: 'test'; reqId: string; questionId: string; lang: Lang; files: Record<string, string> }
+  | StudentMsgV2
   | { t: 'run'; reqId: string; lang: Lang; files: Record<string, string>; stdin: string }
   | { t: 'clock-in' }
   | { t: 'time-sync'; c: number }
@@ -138,7 +140,7 @@ export type StudentMsg =
 export type TeacherMsg =
   | { t: 'refused'; reason: 'version' | 'ended' | 'identity' | 'full' }
   | { t: 'welcome'; token?: string; config: StudentRoomConfig; phase: Phase; lastEvent: number; lastEventHash?: string; lastRec: number; team?: TeamInfo; drafts?: Record<string, { answer: Answer; rev: number }> }
-  | { t: 'exam'; exam: Exam; endsAt: number | null; clocks: QuestionClocks; now: number }
+  | TeacherMsgV2
   | { t: 'clock'; endsAt: number; now: number }
   | { t: 'phase'; phase: Phase }
   | { t: 'ack'; stream: 'event' | 'rec'; seq: number }
@@ -195,7 +197,8 @@ export type RunReport =
 // Dos testes ocultos o aluno só recebe a contagem. Entrada e saída esperada nunca saem do professor.
 export type TestReport =
   | { reqId: string; questionId: string; status: 'limited'; retryInMs: number }
-  | { reqId: string; questionId: string; status: 'queued' }
+  | { reqId: string; questionId: string; status: 'queued'; position?: number }
+  | TestReportV2
   | { reqId: string; questionId: string; status: 'compile-error'; log: string; nextInMs: number }
   | {
       reqId: string
@@ -219,3 +222,29 @@ export interface StudentRoomConfig {
   recordScreen: boolean
   maxTeamSize: number
 }
+
+// ---- versão 2
+
+// O executável já compilado no aluno vai nos bytes. O professor só roda, e a nota continua
+// saindo do código no documento da equipe, compilado lá.
+export type StudentMsgV2 = { t: 'test-wasm'; reqId: string; questionId: string; lang: Lang }
+
+export type TeacherMsgV2 =
+  // Prova inteira, ao conectar: os bytes são o JSON da prova em deflate-raw, codificado uma vez só
+  // para a sala toda.
+  | { t: 'exam'; endsAt: number | null; clocks: QuestionClocks; now: number }
+  // Liberar e retirar mandam só a diferença. `restore` é questão que o aluno já recebeu nesta
+  // conexão e guardou ao ser retirada: volta sem reenviar enunciado nem imagens.
+  | { t: 'questions'; add: Question[]; restore: string[]; remove: string[]; order: string[]; clocks: QuestionClocks; now: number }
+  // Somar tempo e fim do tempo de uma questão: só os relógios.
+  | { t: 'clocks'; clocks: QuestionClocks; now: number }
+
+export type TestReportV2 =
+  // Já tem um teste desta equipe esperando ou rodando. Não gasta o minuto.
+  | { reqId: string; questionId: string; status: 'busy' }
+  // Executável recusado antes de rodar. Também não gasta o minuto.
+  | { reqId: string; questionId: string; status: 'invalid'; log: string }
+
+// Teto do que cada lado aceita descomprimir: a prova com imagens de um lado, o executável do outro.
+export const MAX_INFLATED_TO_STUDENT = 48 * 1024 * 1024
+export const MAX_INFLATED_TO_TEACHER = 9 * 1024 * 1024

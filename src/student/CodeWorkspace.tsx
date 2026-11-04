@@ -372,7 +372,7 @@ export function CodeWorkspace({ question }: { question: CodeQuestion }) {
         onTest={() => {
           lastJob.test = question.id
           setView('tests')
-          s.runTest(question.id)
+          void s.runTest(question.id)
         }}
       />
       <Modal open={deleting !== null} title={`Apagar ${deleting ?? ''}?`} onClose={() => setDeleting(null)}>
@@ -498,7 +498,12 @@ function RunOutputView() {
 
 function TestView({ question }: { question: CodeQuestion }) {
   const s = studentSession
-  if (s.testing && lastJob.test === question.id) return <span className="i">Testando…</span>
+  if (s.testing && lastJob.test === question.id) {
+    if (s.testStage === 'compiling') return <span className="i">Compilando para testar…</span>
+    if (s.testPosition) return <span className="i">Na fila do professor: posição {s.testPosition}</span>
+    return <span className="i">Testando…</span>
+  }
+  if (s.testNotice && lastJob.test === question.id) return <span className="e">{s.testNotice}</span>
   const report = s.testReport
   if (!report || report.questionId !== question.id) return null
   if (report.status === 'compile-error') return <span className="e">{report.log}</span>

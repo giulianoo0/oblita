@@ -2,7 +2,9 @@
 // enviada ao aluno é construída a partir de `solutions`, e a prova só sai por examForStudent.
 import { BEACON, decodeBeacon, randomBeaconCode } from '../../shared/beacon'
 import { checkOutput, defaultStarter, mainFile, type CodeQuestion, type Exam, type HiddenTest, type Solutions } from '../../shared/exam'
-import { decodeFrame, encodeBinary, encodeJson } from '../../shared/frames'
+import { decodeFrame, deflate, deflateFrame, encodeBinary, encodeJson, inflateFrame } from '../../shared/frames'
+import { JobQueue } from '../../shared/jobs'
+import { checkStudentWasm } from '../../shared/wasm'
 import {
   ALERT_LABEL,
   ALERT_SEVERE,
@@ -10,6 +12,7 @@ import {
   REVEAL_COUNTDOWN_SECONDS,
   MAX_Y_UPDATE_BYTES,
   HOST_RUN_INTERVAL_MS,
+  MAX_INFLATED_TO_TEACHER,
   PROTOCOL_VERSION,
   RUN_LIMITS,
   TEST_INTERVAL_MS,
@@ -34,7 +37,8 @@ import { Observable, randomId } from '../lib/store'
 import { addTime, expiredQuestions, isOpen, isVisible, release, visibleExam, withdraw, type Flow, type QuestionClocks } from '../../shared/flow'
 import { ExamDoc } from '../collab/examDoc'
 import { connectHubBus, connectRtcBus, type Bus } from '../net/bus'
-import { compile, run } from '../compiler/client'
+import { compile, run, setCompilePool, type CompileResult } from '../compiler/client'
+import { sandboxPort } from '../compiler/sandbox'
 import { RoomStore, type KV, type RoomState } from './roomStore'
 import { Recordings } from './recStore'
 import { DiskMirror } from './diskSink'
@@ -74,6 +78,16 @@ const SAVE_EVERY_MS = 1000
 const MAX_ALERTS_PER_STUDENT = 500
 const MAX_REC_BYTES_PER_STUDENT = 2 * 1024 * 1024 * 1024
 const MAX_BEACON_PIXELS = 4_000_000
+
+// Cada execução pode chegar a 256 MB e prende um núcleo; cada clang com STL passa de meio GB e
+// leva ~10 s. A correção final ganha um pool pequeno de compiladores; o Testar com o executável
+// do aluno só precisa das vagas de execução.
+function jobLimits() {
+  const cores = navigator.hardwareConcurrency || 2
+  const memoryGb = (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 4
+  const clamp = (n: number, max: number) => Math.max(1, Math.min(max, Math.floor(n)))
+  return { running: clamp(cores / 2, 4), compiling: clamp(Math.min(cores / 4, memoryGb / 4), 2) }
+}
 
 const ACTIVE_KEY = 'active-room'
 const MAX_STUDENTS = 512
@@ -251,8 +265,16 @@ export class Room extends Observable {
   private timers: number[] = []
   private saveTimer = 0
   private dueAcks = new Set<Student>()
-  private gradeQueue: (() => Promise<void>)[] = []
-  private gradeRunning = 0
+  private queue: JobQueue | null = null
+  // Quem pediu o teste que está na fila de cada equipe, para avisar a posição.
+  private testOwners = new Map<string, { s: Student; reqId: string; questionId: string }>()
+  // A saída para cada aluno vai em ordem: comprimir é assíncrono e não pode trocar a ordem dos quadros.
+  private outChains = new WeakMap<PeerLink, Promise<unknown>>()
+  private inChains = new WeakMap<PeerLink, Promise<unknown>>()
+  // A prova visível, já em JSON comprimido: codificada uma vez para a sala toda.
+  private examCache: { key: string; bytes: Promise<Uint8Array<ArrayBuffer>> } | null = null
+  // Questões que cada aluno já recebeu nesta conexão: ao liberar de novo, não reenvia o conteúdo.
+  private delivered = new Map<string, Set<string>>()
   private focused: string | null = null
   private lastTest = new Map<string, number>()
   private lastRun = new Map<string, number>()
@@ -536,10 +558,31 @@ export class Room extends Observable {
   }
 
   private sendTo(peer: string, msg: TeacherMsg) {
-    const frame = encodeJson(msg)
-    const channel = this.links.get(peer)?.channel
-    if (!channel) return
-    void channel.then((c) => c.seal(frame)).then((sealed) => this.bus?.send(peer, sealed), () => this.bus?.drop(peer))
+    this.sendPacked(peer, deflateFrame(encodeJson(msg)))
+  }
+
+  // Recebe o quadro já pronto (e talvez compartilhado com a sala toda); só a cifra é por aluno.
+  private sendPacked(peer: string, packed: Promise<Uint8Array<ArrayBuffer>>) {
+    const link = this.links.get(peer)
+    const channel = link?.channel
+    if (!link || !channel) return
+    const job = (this.outChains.get(link) ?? Promise.resolve())
+      .then(async () => (await channel).seal(await packed))
+      .then(
+        (sealed) => this.links.get(peer) === link && this.bus?.send(peer, sealed),
+        () => this.bus?.drop(peer),
+      )
+    this.outChains.set(link, job)
+  }
+
+  // Codifica e comprime uma vez para todos.
+  private broadcast(msg: TeacherMsg, to: (s: Student) => boolean) {
+    let packed: Promise<Uint8Array<ArrayBuffer>> | null = null
+    for (const s of this.students.values()) {
+      if (!s.peer || !to(s)) continue
+      packed ??= deflateFrame(encodeJson(msg))
+      this.sendPacked(s.peer, packed)
+    }
   }
 
   // ---- aperto de mão: em claro só passam as chaves públicas
@@ -586,20 +629,32 @@ export class Room extends Observable {
     const link = this.links.get(peer)
     if (!link) return
     if (!link.channel) return this.onKey(peer, link, frame)
-    void link.channel
-      .then((c) => c.open(frame))
-      .then(
-        (plain) => {
-          if (this.links.get(peer) !== link) return
-          try {
-            this.onPlain(peer, link, plain)
-          } catch (err) {
-            console.error('mensagem de aluno rejeitada', err)
-            this.bus?.drop(peer)
-          }
-        },
-        () => this.links.get(peer) === link && this.onBadFrame(peer, link),
-      )
+    const channel = link.channel
+    // Em fila: descomprimir é assíncrono, e a ordem das mensagens é parte do protocolo.
+    const job = (this.inChains.get(link) ?? Promise.resolve()).then(async () => {
+      let plain: Uint8Array
+      try {
+        plain = await (await channel).open(frame)
+      } catch {
+        if (this.links.get(peer) === link) this.onBadFrame(peer, link)
+        return
+      }
+      if (this.links.get(peer) !== link) return
+      let opened: Uint8Array
+      try {
+        opened = await inflateFrame(plain, MAX_INFLATED_TO_TEACHER)
+      } catch {
+        return this.bus?.drop(peer)
+      }
+      if (this.links.get(peer) !== link) return
+      try {
+        this.onPlain(peer, link, opened)
+      } catch (err) {
+        console.error('mensagem de aluno rejeitada', err)
+        this.bus?.drop(peer)
+      }
+    })
+    this.inChains.set(link, job.catch(() => {}))
   }
 
   private onPlain(peer: string, link: PeerLink, frame: Uint8Array) {
@@ -693,6 +748,9 @@ export class Room extends Observable {
         break
       case 'test':
         this.onTest(s, msg)
+        break
+      case 'test-wasm':
+        if (bytes) this.onTest(s, msg, bytes)
         break
       case 'run':
         this.onRun(s, msg)
@@ -871,7 +929,11 @@ export class Room extends Observable {
     if (this.phase !== 'running' || s.examSent || !s.peer || s.finishedAt) return
     if (!endsAt && this.flow !== 'manual') return
     if (this.config.mode === 'group' && !s.groupId) return
-    if (this.teamOf(s).closed || !this.ready(s)) return
+    // Quem já recebeu a prova e perdeu só o compartilhamento da tela continua: a queda já virou
+    // alerta, e travar a prova por isso não ajuda ninguém. Antes da prova, a tela é obrigatória.
+    const st = s.status
+    const ready = s.examGranted ? st.fullscreen && !st.extended && (!this.config.requireIsolation || st.isolated === true) : this.ready(s)
+    if (this.teamOf(s).closed || !ready) return
     s.examSent = true
     s.examGranted = true
     const peer = s.peer
@@ -883,19 +945,45 @@ export class Room extends Observable {
     void this.save().then(send, send)
   }
 
+  private examBytes() {
+    const visible = visibleExam(this.exam, this.flow, this.clocks)
+    const ids = visible.questions.map((q) => q.id)
+    const key = ids.join('|')
+    if (this.examCache?.key !== key) this.examCache = { key, bytes: deflate(new TextEncoder().encode(JSON.stringify(visible))) }
+    return { ids, bytes: this.examCache.bytes }
+  }
+
+  // A prova inteira só sai ao conectar. O resto é diferença (broadcastQuestions, broadcastClocks).
   private sendExam(s: Student) {
-    if (s.peer) this.sendTo(s.peer, { t: 'exam', exam: visibleExam(this.exam, this.flow, this.clocks), endsAt: this.endsAtOf(s), clocks: this.clocks, now: Date.now() })
+    if (!s.peer) return
+    const { ids, bytes } = this.examBytes()
+    const header: TeacherMsg = { t: 'exam', endsAt: this.endsAtOf(s), clocks: this.clocks, now: Date.now() }
+    this.sendPacked(s.peer, bytes.then((b) => encodeBinary(header, b)))
+    this.delivered.set(s.clientId, new Set(ids))
   }
 
   // Salva o código inicial antes de soltar, pelo mesmo motivo de maybeSendExam.
-  private broadcastExam() {
+  private broadcastQuestions(change: { add?: string; remove?: string }) {
     for (const team of this.teams.values()) {
       if ([...this.students.values()].some((s) => s.examGranted && this.teamKey(s) === team.key)) this.seedDoc(team)
     }
     const send = () => {
-      for (const s of this.students.values()) if (s.examSent) this.sendExam(s)
+      const visible = visibleExam(this.exam, this.flow, this.clocks)
+      const order = visible.questions.map((q) => q.id)
+      const base = { order, clocks: this.clocks, now: Date.now(), remove: change.remove ? [change.remove] : [] }
+      const added = change.add ? visible.questions.filter((q) => q.id === change.add) : []
+      const had = (s: Student) => !!change.add && !!this.delivered.get(s.clientId)?.has(change.add)
+      // Dois quadros para a sala toda: com o conteúdo, para quem nunca viu, e sem, para quem já tem.
+      this.broadcast({ t: 'questions', ...base, add: added, restore: [] }, (s) => s.examSent && !had(s))
+      this.broadcast({ t: 'questions', ...base, add: [], restore: added.map((q) => q.id) }, (s) => s.examSent && had(s))
+      for (const s of this.students.values()) if (s.examSent && change.add) this.delivered.get(s.clientId)?.add(change.add)
     }
     void this.save().then(send, send)
+    this.touch()
+  }
+
+  private broadcastClocks() {
+    this.broadcast({ t: 'clocks', clocks: this.clocks, now: Date.now() }, (s) => s.examSent)
     this.touch()
   }
 
@@ -912,7 +1000,7 @@ export class Room extends Observable {
       if (this.phase !== 'running') return this.changed()
       // O tempo da questão começa aqui, na revelação, e não no clique.
       this.clocks = release(this.clocks, questionId, Date.now(), minutes)
-      this.broadcastExam()
+      this.broadcastQuestions({ add: questionId })
     }, REVEAL_COUNTDOWN_SECONDS * 1000)
   }
 
@@ -920,13 +1008,13 @@ export class Room extends Observable {
     if (this.flow !== 'manual' || !this.clocks[questionId]) return
     if (!this.clocks[questionId].closed) this.freezeQuestion(questionId)
     this.clocks = withdraw(this.clocks, questionId)
-    this.broadcastExam()
+    this.broadcastQuestions({ remove: questionId })
   }
 
   addQuestionTime(questionId: string, minutes: number) {
     if (this.flow !== 'manual') return
     this.clocks = addTime(this.clocks, questionId, minutes, Date.now())
-    this.broadcastExam()
+    this.broadcastClocks()
   }
 
   // A resposta que vale é a deste instante. O documento segue aceitando atualizações, porque o CRDT
@@ -1040,7 +1128,7 @@ export class Room extends Observable {
         this.freezeQuestion(id)
         this.clocks = { ...this.clocks, [id]: { ...this.clocks[id], closed: true } }
       }
-      if (expired.length) this.broadcastExam()
+      if (expired.length) this.broadcastClocks()
       return
     }
     if (this.config.timing === 'global') {
@@ -1056,7 +1144,10 @@ export class Room extends Observable {
   }
 
   private onThumb(s: Student, bytes: Uint8Array, focus: boolean) {
-    const blob = new Blob([bytes.slice()], { type: 'image/jpeg' })
+    if (bytes.length > 2 * 1024 * 1024) return
+    // WebP quando o navegador do aluno sabe gerar; o tipo sai dos próprios bytes.
+    const webp = bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[8] === 0x57 && bytes[9] === 0x45
+    const blob = new Blob([bytes.slice()], { type: webp ? 'image/webp' : 'image/jpeg' })
     this.lastThumb.set(s.clientId, blob)
     const swap = (map: Map<string, string>) => {
       const old = map.get(s.clientId)
@@ -1407,9 +1498,7 @@ export class Room extends Observable {
   }
 
   private sendBinaryTo(peer: string, frame: Uint8Array<ArrayBuffer>) {
-    const channel = this.links.get(peer)?.channel
-    if (!channel) return
-    void channel.then((c) => c.seal(frame)).then((sealed) => this.bus?.send(peer, sealed), () => this.bus?.drop(peer))
+    this.sendPacked(peer, deflateFrame(frame))
   }
 
   private relayToTeam(s: Student, frame: Uint8Array<ArrayBuffer>) {
@@ -1638,6 +1727,20 @@ export class Room extends Observable {
     this.touch()
   }
 
+  // ---- fila de trabalho: correção final na frente, depois testes e execuções dos alunos
+
+  private get jobs() {
+    if (!this.queue) {
+      const limits = jobLimits()
+      setCompilePool(limits.compiling)
+      this.queue = new JobQueue(limits, (key, position) => {
+        const owner = this.testOwners.get(key)
+        if (owner) this.sendToStudent(owner.s, { t: 'test-result', result: { reqId: owner.reqId, questionId: owner.questionId, status: 'queued', position } })
+      })
+    }
+    return this.queue
+  }
+
   // ---- rodar quando o WebAssembly do aluno não está disponível: usa os mesmos limites explícitos
 
   private onRun(s: Student, msg: Extract<StudentMsg, { t: 'run' }>) {
@@ -1649,52 +1752,80 @@ export class Room extends Observable {
     const key = this.teamKey(s)
     const wait = (this.lastRun.get(key) ?? 0) + HOST_RUN_INTERVAL_MS - Date.now()
     if (wait > 0) return report({ reqId, status: 'limited', retryInMs: wait })
-    this.lastRun.set(key, Date.now())
-    this.gradeQueue.push(async () => {
-      const built = await compile(msg.lang, msg.files)
-      if (!built.ok) return report({ reqId, status: 'compile-error', log: built.log.slice(0, 8000) })
-      const out = await run(built.wasm, msg.stdin.slice(0, 256 * 1024), RUN_LIMITS.timeMs)
-      report({
-        reqId,
-        status: 'done',
-        log: built.log.slice(0, 8000),
-        stdout: out.stdout.slice(0, RUN_LIMITS.outputKb * 1024),
-        stderr: out.stderr.slice(0, 16 * 1024),
-        exitCode: out.exitCode,
-        timedOut: out.timedOut,
-        error: out.error,
-      })
+    const pushed = this.jobs.push({
+      lane: 'test',
+      key: `run:${key}`,
+      compile: true,
+      run: async () => {
+        const built = await compile(msg.lang, msg.files)
+        if (!built.ok) return report({ reqId, status: 'compile-error', log: built.log.slice(0, 8000) })
+        const out = await run(built.wasm, msg.stdin.slice(0, 256 * 1024), RUN_LIMITS.timeMs, undefined, sandboxPort)
+        report({
+          reqId,
+          status: 'done',
+          log: built.log.slice(0, 8000),
+          stdout: out.stdout.slice(0, RUN_LIMITS.outputKb * 1024),
+          stderr: out.stderr.slice(0, 16 * 1024),
+          exitCode: out.exitCode,
+          timedOut: out.timedOut,
+          error: out.error,
+        })
+      },
     })
-    this.pumpGrades()
+    if (!pushed.ok) return report({ reqId, status: 'limited', retryInMs: HOST_RUN_INTERVAL_MS })
+    this.lastRun.set(key, Date.now())
   }
 
-  // ---- teste pedido pelo aluno: roda aqui, no máximo uma vez por minuto para cada pessoa ou grupo
+  // ---- teste pedido pelo aluno: no máximo um por minuto e um na fila para cada pessoa ou grupo.
+  // Com `wasm`, o aluno já compilou: aqui só roda, no sandbox, depois de conferir o executável.
 
-  private onTest(s: Student, msg: Extract<StudentMsg, { t: 'test' }>) {
+  private onTest(s: Student, msg: Extract<StudentMsg, { t: 'test' | 'test-wasm' }>, wasm?: Uint8Array) {
     const { reqId, questionId } = msg
+    if (typeof reqId !== 'string' || typeof questionId !== 'string') return
     const report = (result: TestReport) => this.sendToStudent(s, { t: 'test-result', result })
     const q = this.exam.questions.find((q) => q.id === questionId)
     if (this.phase !== 'running' || !this.config.compiler || q?.type !== 'code' || !s.examSent) return
-    // Sem resposta o botão do aluno ficaria preso. Não gasta o minuto dele.
-    if (!q.languages.includes(msg.lang) || !validFiles(msg.files)) return report({ reqId, questionId, status: 'compile-error', log: 'Arquivos fora do limite', nextInMs: 0 })
+    // Recusas daqui até a fila não gastam o minuto, e sempre respondem: senão o botão ficaria preso.
+    const source = msg.t === 'test' ? msg.files : null
+    if (!q.languages.includes(msg.lang) || (!wasm && !validFiles(source))) return report({ reqId, questionId, status: 'compile-error', log: 'Arquivos fora do limite', nextInMs: 0 })
     if (!this.questionOpen(questionId)) return report({ reqId, questionId, status: 'compile-error', log: 'Esta questão está fechada', nextInMs: 0 })
     const key = this.teamKey(s)
+    if (this.jobs.position(key) !== null) return report({ reqId, questionId, status: 'busy' })
     const wait = (this.lastTest.get(key) ?? 0) + TEST_INTERVAL_MS - Date.now()
     if (wait > 0) return report({ reqId, questionId, status: 'limited', retryInMs: wait })
+    let program: Uint8Array<ArrayBuffer> | null = null
+    if (wasm) {
+      const checked = checkStudentWasm(wasm)
+      if (!checked.ok) return report({ reqId, questionId, status: 'invalid', log: checked.reason })
+      program = wasm.slice()
+    }
+    const pushed = this.jobs.push({
+      lane: 'test',
+      key,
+      compile: !program,
+      run: async () => {
+        try {
+          await this.runStudentTest(s, msg.lang, source, program, q, reqId, report)
+        } finally {
+          this.testOwners.delete(key)
+        }
+      },
+    })
+    if (!pushed.ok) return report({ reqId, questionId, status: 'busy' })
     this.lastTest.set(key, Date.now())
-    report({ reqId, questionId, status: 'queued' })
-    this.gradeQueue.push(() => this.runStudentTest(s, msg, q, report))
-    this.pumpGrades()
+    this.testOwners.set(key, { s, reqId, questionId })
+    if (pushed.position > 0) report({ reqId, questionId, status: 'queued', position: pushed.position })
   }
 
-  private async runStudentTest(_s: Student, msg: Extract<StudentMsg, { t: 'test' }>, q: CodeQuestion, report: (r: TestReport) => void) {
-    const { reqId, questionId } = msg
-    const nextInMs = () => Math.max(0, TEST_INTERVAL_MS - (Date.now() - (this.lastTest.get(this.teamKey(_s)) ?? 0)))
-    const built = await compile(msg.lang, msg.files)
+  private async runStudentTest(s: Student, lang: CodeQuestion['languages'][number], files: Record<string, string> | null, wasm: Uint8Array<ArrayBuffer> | null, q: CodeQuestion, reqId: string, report: (r: TestReport) => void) {
+    const questionId = q.id
+    const nextInMs = () => Math.max(0, TEST_INTERVAL_MS - (Date.now() - (this.lastTest.get(this.teamKey(s)) ?? 0)))
+    // O log de compilação só existe quando compilou aqui. No executável pronto, o aluno já viu o dele.
+    const built: CompileResult = wasm ? { ok: true, wasm, log: '', ms: 0 } : await compile(lang, files ?? {})
     if (!built.ok) return report({ reqId, questionId, status: 'compile-error', log: built.log.slice(0, 8000), nextInMs: nextInMs() })
     const samples: Extract<TestReport, { status: 'done' }>['samples'] = []
     for (const sample of q.samples ?? []) {
-      const out = await run(built.wasm, sample.stdin, 2000)
+      const out = await run(built.wasm, sample.stdin, 2000, undefined, sandboxPort)
       samples.push({
         passed: !out.timedOut && out.exitCode === 0 && checkOutput(sample.stdout, out.stdout),
         stdin: sample.stdin,
@@ -1707,14 +1838,16 @@ export class Room extends Observable {
     const solution = this.solutions?.solutions.find((x) => x.questionId === questionId)
     const tests = solution?.type === 'code' ? solution.tests : []
     let passed = 0
+    // Dos ocultos só sai a contagem: nem saída, nem erro, nem tempo de cada um.
     for (const test of tests) {
-      const out = await run(built.wasm, test.stdin, test.timeoutMs ?? 2000)
+      const out = await run(built.wasm, test.stdin, test.timeoutMs ?? 2000, undefined, sandboxPort)
       if (!out.timedOut && out.exitCode === 0 && checkOutput(test.stdout, out.stdout, test.checker)) passed++
     }
     report({ reqId, questionId, status: 'done', log: built.log.slice(0, 8000), samples, hidden: { passed, total: tests.length }, nextInMs: nextInMs() })
   }
 
-  // ---- correção: roda aqui, no navegador do professor, com os testes ocultos
+  // ---- correção: roda aqui, no navegador do professor, com os testes ocultos. Sempre compila aqui,
+  // a partir do documento da equipe: o executável mandado pelo aluno nunca vale nota.
 
   private enqueueGrade(team: Team, questionId: string) {
     const q = this.exam.questions.find((q) => q.id === questionId)
@@ -1723,23 +1856,14 @@ export class Room extends Observable {
     const key = `${team.key}/${questionId}`
     if (this.queuedGrades.has(key)) return
     this.queuedGrades.add(key)
-    this.gradeQueue.push(() => {
-      this.queuedGrades.delete(key)
-      return this.grade(team, questionId)
+    this.jobs.push({
+      lane: 'grade',
+      compile: q.type === 'code',
+      run: () => {
+        this.queuedGrades.delete(key)
+        return this.grade(team, questionId)
+      },
     })
-    this.pumpGrades()
-  }
-
-  private pumpGrades() {
-    const limit = Math.max(1, Math.floor((navigator.hardwareConcurrency || 2) / 2))
-    while (this.gradeRunning < limit && this.gradeQueue.length) {
-      const job = this.gradeQueue.shift()!
-      this.gradeRunning++
-      void job().finally(() => {
-        this.gradeRunning--
-        this.pumpGrades()
-      })
-    }
   }
 
   private async grade(team: Team, questionId: string) {
@@ -1781,7 +1905,7 @@ export class Room extends Observable {
     }
     const results: TestResult[] = []
     for (const [index, test] of tests.entries()) {
-      const out = await run(built.wasm, test.stdin, test.timeoutMs ?? 2000)
+      const out = await run(built.wasm, test.stdin, test.timeoutMs ?? 2000, undefined, sandboxPort)
       const passed = !out.timedOut && out.exitCode === 0 && checkOutput(test.stdout, out.stdout, test.checker)
       results.push({
         index,
