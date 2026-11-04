@@ -4,6 +4,7 @@
 // Quadro: [u8 tag] ...
 //   tag 1 (JSON):    [u8 1][utf-8]
 //   tag 2 (binário): [u8 2][u32 tamanho do cabeçalho][cabeçalho JSON][bytes]
+//   tag 4 (comprimido): [u8 4][deflate-raw de um quadro tag 1 ou 2]
 
 const enc = new TextEncoder()
 const dec = new TextDecoder()
@@ -36,6 +37,58 @@ export function decodeFrame<T>(frame: Uint8Array): Decoded<T> {
     json: JSON.parse(dec.decode(frame.subarray(5, 5 + headLen))),
     bytes: frame.subarray(5 + headLen),
   }
+}
+
+// ---- compressão: vai antes da cifra, porque cifrado não comprime mais
+
+export const DEFLATE_TAG = 4
+// Abaixo disto o cabeçalho do deflate e o custo de criar o fluxo não compensam.
+export const COMPRESS_MIN = 512
+
+async function pipe(bytes: Uint8Array<ArrayBuffer>, stream: TransformStream<Uint8Array, Uint8Array>, max: number) {
+  const reader = new Blob([bytes]).stream().pipeThrough(stream).getReader()
+  const parts: Uint8Array[] = []
+  let total = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    total += value.length
+    // Lê aos pedaços e para no limite: um quadro pequeno pode inflar para gigabytes.
+    if (total > max) {
+      await reader.cancel().catch(() => {})
+      throw new Error('quadro grande demais')
+    }
+    parts.push(value)
+  }
+  const out = new Uint8Array(total)
+  let at = 0
+  for (const part of parts) {
+    out.set(part, at)
+    at += part.length
+  }
+  return out
+}
+
+export const deflate = (bytes: Uint8Array<ArrayBuffer>) => pipe(bytes, new CompressionStream('deflate-raw'), Infinity)
+export const inflate = (bytes: Uint8Array, max: number) => pipe(bytes.slice(), new DecompressionStream('deflate-raw'), max)
+
+// Comprime só o que encolhe de verdade. Vídeo e imagem já vêm comprimidos: quem envia nem tenta.
+export async function deflateFrame(frame: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
+  if (frame.length < COMPRESS_MIN || frame[0] === DEFLATE_TAG) return frame
+  const body = await deflate(frame)
+  if (body.length + 1 >= frame.length) return frame
+  const out = new Uint8Array(body.length + 1)
+  out[0] = DEFLATE_TAG
+  out.set(body, 1)
+  return out
+}
+
+// Devolve o quadro aberto. Lança se não abrir, se passar de `max` ou se vier comprimido duas vezes.
+export async function inflateFrame(frame: Uint8Array, max: number): Promise<Uint8Array<ArrayBuffer>> {
+  if (frame[0] !== DEFLATE_TAG) return frame as Uint8Array<ArrayBuffer>
+  const inner = await inflate(frame.subarray(1), max)
+  if (inner[0] !== 1 && inner[0] !== 2) throw new Error('quadro comprimido inválido')
+  return inner
 }
 
 // Protocolo do hub, entre o professor e o programa: [u32 conexão][u8 op][dados].
