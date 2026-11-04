@@ -19,8 +19,11 @@
   --green-600: oklch(0.627 0.194 149);
   --amber-500: oklch(0.77 0.16 70);
   --amber-600: oklch(0.67 0.16 58);
-  --orange-500: oklch(0.72 0.18 41);
-  --orange-600: oklch(0.67 0.19 39);
+  /* A marca: índigo puxado para o violeta, longe o bastante do azul de interação (sky). */
+  --indigo-450: oklch(0.58 0.21 280);
+  --indigo-400: oklch(0.63 0.19 280);
+  --indigo-500: oklch(0.55 0.22 279);
+  --indigo-600: oklch(0.49 0.22 279);
 
   --background: #ededee;
   --surface: #fff;
@@ -38,9 +41,9 @@
   --primary: var(--sky-500);
   --primary-hover: var(--sky-600);
   --on-primary: #fff;
-  --brand: var(--orange-500);
-  --brand-hover: var(--orange-600);
-  --on-brand: oklch(0.2 0.04 40);
+  --brand: var(--indigo-500);
+  --brand-hover: var(--indigo-600);
+  --on-brand: #fff;
   --danger: var(--red-600);
   --on-danger: #fff;
   --soft: color-mix(in oklab, var(--text) 5%, transparent);
@@ -112,6 +115,8 @@
     --primary: var(--sky-400);
     --primary-hover: var(--sky-300);
     --on-primary: oklch(0.15 0.03 262);
+    --brand: var(--indigo-450);
+    --brand-hover: var(--indigo-400);
     --danger: var(--red-500);
     --soft: color-mix(in oklab, var(--text) 7%, transparent);
     --soft-hover: color-mix(in oklab, var(--text) 12%, transparent);

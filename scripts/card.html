@@ -1,18 +1,22 @@
 <!doctype html>
 <meta charset="utf-8" />
+<!-- O card de 1200x630 dos embeds (OpenGraph, Twitter, oEmbed). Gere com scripts/render-brand.mjs. -->
 <style>
   @font-face { font-family: 'Geist Serif'; src: url('../src/assets/fonts/GeistSerifVF.woff2') format('woff2-variations'); font-weight: 100 900; }
   @font-face { font-family: 'Geist'; src: url('../node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2') format('woff2'); font-weight: 100 900; }
   * { margin: 0; box-sizing: border-box; }
   html, body { width: 1200px; height: 630px; overflow: hidden; }
-  body { background: #0f0f0f; color: #ededed; font-family: 'Geist', system-ui, sans-serif; display: flex; flex-direction: column; justify-content: center; padding: 0 96px; gap: 36px; }
-  .logo { display: flex; align-items: flex-end; font-family: 'Geist Serif'; font-weight: 600; font-size: 148px; line-height: 0.9; letter-spacing: -0.05em; }
-  .logo i { font-style: normal; color: #f5793a; }
-  p { font-size: 46px; font-weight: 500; letter-spacing: -0.02em; color: #9b9b9b; max-width: 960px; line-height: 1.15; }
-  .wall { position: absolute; right: -60px; bottom: -60px; display: grid; grid-template-columns: repeat(3, 180px); gap: 12px; opacity: 0.5; }
-  .wall div { height: 110px; border-radius: 22px; background: #232322; }
-  .wall .a { box-shadow: inset 0 0 0 4px #e5484d; }
+  body { position: relative; background: #0f0f0f; color: #ededed; font-family: 'Geist', system-ui, sans-serif; display: flex; flex-direction: column; justify-content: center; padding: 0 0 0 96px; gap: 28px; }
+  .glow { position: absolute; right: -140px; top: 50%; width: 760px; height: 760px; translate: 0 -50%; border-radius: 50%; background: radial-gradient(closest-side, oklch(0.55 0.22 279 / 0.38), transparent); }
+  .eagle { position: absolute; right: 40px; bottom: -24px; width: 520px; height: 520px; }
+  .logo { position: relative; font-family: 'Geist Serif'; font-weight: 500; font-size: 132px; line-height: 0.9; letter-spacing: -0.045em; }
+  .logo i { font-style: normal; color: #7b6ff2; }
+  p { position: relative; max-width: 620px; font-size: 52px; font-weight: 500; letter-spacing: -0.022em; line-height: 1.1; color: #ededed; }
+  p span { font-family: 'Geist Serif'; color: #8b80f5; }
+  small { position: relative; font-size: 26px; color: #8f8f94; letter-spacing: -0.01em; }
 </style>
-<div class="wall"><div></div><div></div><div></div><div></div><div class="a"></div><div></div></div>
+<div class="glow"></div>
+<img class="eagle" src="../public/eagle.svg" alt="" />
 <div class="logo">oblita<i>_</i></div>
-<p>provas online de código sem cola.</p>
+<p>provas online de código <span>sem cola.</span></p>
+<small>C e C++ sem internet, com a tela gravada.</small>

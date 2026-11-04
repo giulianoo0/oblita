@@ -1,0 +1,58 @@
+/* A águia-careca: cabeça branca, corpo marrom-escuro, bico e olho amarelos. Chapada, sem gradiente. */
+.eagle {
+  --eagle-feather: #3f2616;
+  --eagle-feather-light: #5a3721;
+  --eagle-feather-line: #2a180d;
+  --eagle-white: #f7f5ef;
+  --eagle-shade: #dcd6c8;
+  --eagle-beak: #f6b51e;
+  --eagle-beak-low: #e39a0c;
+  --eagle-beak-line: #a96a00;
+  --eagle-iris: #f6c445;
+  --eagle-ink: #1b1b1a;
+  --eagle-brow: #2f2f2e;
+  display: block;
+  flex: none;
+  overflow: visible;
+  transform-origin: 50%;
+  animation: eagle-float 4s ease-in-out -1s infinite;
+}
+
+.eagle-body { transform-box: view-box; transform-origin: 50% 85%; animation: eagle-sway 4s ease-in-out -2.5s infinite; }
+.eagle-torso { fill: var(--eagle-feather); }
+.eagle-wing { fill: var(--eagle-feather-light); transform-box: fill-box; transform-origin: 30% 0%; animation: eagle-ruffle 1.6s ease-in-out infinite; }
+.eagle-feathers { stroke: var(--eagle-feather-line); stroke-width: 6; stroke-linecap: round; fill: none; opacity: 0.6; }
+.eagle-white { fill: var(--eagle-white); }
+.eagle-shade { fill: var(--eagle-shade); }
+.eagle-beak-top { fill: var(--eagle-beak); }
+.eagle-beak-low { fill: var(--eagle-beak-low); }
+.eagle-nostril { stroke: var(--eagle-beak-line); stroke-width: 5; stroke-linecap: round; fill: none; }
+.eagle-iris { fill: var(--eagle-iris); }
+.eagle-pupil { fill: var(--eagle-ink); }
+.eagle-glint { fill: #fff; }
+.eagle-brow { fill: var(--eagle-brow); }
+.eagle-line { stroke: var(--text-faint, #8e8e93); stroke-width: 8; stroke-linecap: round; animation: eagle-flicker 1.2s ease-in-out infinite; }
+.eagle-line + .eagle-line { animation-delay: -0.6s; }
+
+/* O olhar: a pupila anda no olho e a cabeça vira um pouco junto, como o nariz do skullet. */
+.eagle-pupil, .eagle-glint, .eagle-head { transition: transform 0.25s ease-out; }
+.eagle-pupil, .eagle-glint { transform: translate(var(--look-x, 0px), var(--look-y, 0px)); }
+.eagle-head { transform-box: view-box; transform-origin: 46% 60%; transform: translate(calc(var(--look-x, 0px) * 0.5), calc(var(--look-y, 0px) * 0.5)) rotate(calc(var(--look-y, 0px) * 0.4deg)); }
+/* O piscar fecha o olho por baixo da sobrancelha. */
+.eagle-eye { transform-box: fill-box; transform-origin: 50% 30%; animation: eagle-blink 4s infinite; }
+
+@keyframes eagle-float { 0%, to { transform: translateY(4%); } 50% { transform: translateY(-4%); } }
+@keyframes eagle-sway { 0%, to { transform: rotate(2deg); } 50% { transform: rotate(-2deg); } }
+@keyframes eagle-ruffle { 0%, to { transform: skewY(0) scaleX(1); } 50% { transform: skewY(-3deg) scaleX(1.03); } }
+@keyframes eagle-blink {
+  0%, 31%, 35%, 84%, 88%, 91%, 95%, to { transform: scaleY(1); }
+  33%, 86%, 93% { transform: scaleY(0.08); }
+}
+@keyframes eagle-flicker { 0%, to { opacity: 1; transform: translate(0); } 50% { opacity: 0.35; transform: translate(-4px, -2px); } }
+
+.eagle.still, .eagle.still * { animation: none; }
+.eagle.still .eagle-line { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .eagle, .eagle * { animation: none; }
+  .eagle-pupil, .eagle-glint, .eagle-head { transition: none; }
+}
