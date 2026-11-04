@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import type { Group, Phase } from '../../shared/protocol'
 import { formatClock, useObservable } from '../lib/store'
 import { detectHub } from '../net/bus'
+import { BuildVersion } from '../ui/BuildVersion'
 import { Avatar, Logo, Modal, Pill, Popover, PopoverRow, Segmented, Switch, useTick } from '../ui/kit'
 import { alertLabel, canStreamToDisk, download, exportRoomZip, safeName } from './exportZip'
 import { openRoom, type AlertEntry, type Grade, type Room, type Student, type Team } from './room'
@@ -256,6 +257,7 @@ function DashboardView({ room }: { room: Room }) {
           <Users size={12} /> {online}/{total}
         </span>
         <div className="grow" />
+        <BuildVersion />
         {room.phase !== 'lobby' && (
           <Segmented
             value={view}
