@@ -488,23 +488,25 @@ describe.skipIf(!present || busy)('hub em Rust (.exe real)', () => {
     panel.socket.destroy()
   }, 30_000)
 
-  test('no máximo 16 conexões por IP, inclusive no loopback', async () => {
+  // Uma sala inteira atrás de um NAT (até ~100 alunos) conta como um IP só e tem de caber.
+  const MAX_PER_IP = 128
+  test(`até ${MAX_PER_IP} conexões por IP, para a sala caber atrás de um NAT`, async () => {
     const host = await openPanel()
     const mine: Client[] = []
-    for (let i = 0; i < 16; i++) {
+    for (let i = 0; i < MAX_PER_IP; i++) {
       mine.push(await openStudent())
       decodeHub(await host.next())
     }
-    expect((await ping()).students).toBe(16)
+    expect((await ping()).students).toBe(MAX_PER_IP)
 
     const extra = await openStudent()
     await closed(extra.sock)
-    expect((await ping()).students).toBe(16)
+    expect((await ping()).students).toBe(MAX_PER_IP)
 
     // Outro IP não é afetado.
     const other = await rawConnect('/ws/student', { localAddress: '127.0.9.1' })
     decodeHub(await host.next())
-    expect((await ping()).students).toBe(17)
+    expect((await ping()).students).toBe(MAX_PER_IP + 1)
     other.socket.destroy()
     expect(decodeHub(await host.next()).op).toBe(HubOp.close)
 

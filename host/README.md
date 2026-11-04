@@ -28,7 +28,7 @@ O painel grava por `/ws/files?token=...`, que exige loopback, o token e a origem
 
 ## Limites
 
-- 512 alunos no total e 16 conexões por IP, inclusive no loopback. Alunos atrás de um mesmo NAT contam como um IP só.
+- 512 alunos no total e 128 conexões por IP, inclusive no loopback. Alunos atrás de um mesmo NAT contam como um IP só, então o teto por IP cabe uma sala inteira (até ~100 alunos).
 - Um aluno que não mandar nenhum quadro binário nos primeiros 15 s é fechado. Responder ping ou mandar texto não conta.
 - Quadros de até 8 MiB do aluno para o painel e de até 16 MiB do painel para o aluno. Acima disso, só a conexão que mandou cai.
 - Não há limite de velocidade: um aluno que manda rápido, mas não o bastante para encher a cota, continua gastando a banda e a CPU do painel, e os outros esperam atrás dele na fila.

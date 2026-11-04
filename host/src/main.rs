@@ -51,8 +51,10 @@ pub fn port() -> u16 {
 }
 const HUB_ORIGINS: [&str; 3] = ["https://oblita.giuli.dev", "http://localhost:5173", "http://localhost:3000"];
 const MAX_STUDENTS: usize = 512;
-// Um notebook com sockets crus não pode ocupar todas as vagas. Vale também para o loopback.
-const MAX_PER_IP: usize = 16;
+// Uma sala inteira pode estar atrás de um mesmo NAT (até ~100 alunos), e todos contam como um IP
+// só: por isso o teto por IP tem de caber a sala, não 16. Continua abaixo do limite global de 512,
+// e a memória que um IP ocupa na fila do painel já é limitada à parte por IP_SHARE_BYTES.
+const MAX_PER_IP: usize = 128;
 // Sem o limite, um socket mudo seguraria a vaga para sempre, porque responder ping não prova nada.
 const SILENT_LIMIT: Duration = Duration::from_secs(15);
 // A prova vai do painel ao aluno e pode ser grande; o aluno só manda partes de ~150 KB.
