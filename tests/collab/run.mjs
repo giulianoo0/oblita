@@ -710,7 +710,17 @@ async function run() {
   await settle(300)
   const blocks = () => t('a', `Object.fromEntries([...document.querySelectorAll('[data-block]')].map((e) => { const r = e.getBoundingClientRect(); return [e.dataset.block, { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height), strip: e.dataset.strip ?? null }] }))`)
   const overlaps = (bl) => Object.values(bl).some((a, i, all) => all.some((b, j) => j > i && Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x) > 1 && Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y) > 1))
-  const settled = () => sleep(320)
+  // Espera os blocos pararem de deslizar: com a máquina ocupada, a animação passa dos 220 ms.
+  const settled = async () => {
+    await sleep(120)
+    let last = ''
+    for (let i = 0; i < 40; i++) {
+      const now = JSON.stringify(await t('a', `({ anim: !!document.querySelector('.blk-area[data-animate]'), r: [...document.querySelectorAll('[data-block]')].map((e) => { const b = e.getBoundingClientRect(); return [Math.round(b.left), Math.round(b.top), Math.round(b.width), Math.round(b.height)] }) })`))
+      if (now === last && !JSON.parse(now).anim) return
+      last = now
+      await sleep(80)
+    }
+  }
   const frameA = await frameOrigin('a')
   const inA = (bl, id, fx, fy) => ({ x: frameA.x + bl[id].x + bl[id].w * fx, y: frameA.y + bl[id].y + bl[id].h * fy })
   const head = (id) => `[data-block="${id}"] .blk-title`
@@ -745,8 +755,11 @@ async function run() {
   await clickSel('a', '[data-block="input"] .blk-toggle')
   await settled()
 
-  for (const id of ['statement', 'input', 'output']) await clickSel('a', `[data-block="${id}"] .blk-toggle`)
-  await settled()
+  // Um de cada vez: os blocos deslizam ao recolher, e o clique seguinte mira onde o botão parou.
+  for (const id of ['statement', 'input', 'output']) {
+    await clickSel('a', `[data-block="${id}"] .blk-toggle`)
+    await settled()
+  }
   const lastOpen = await t('a', `({ disabled: document.querySelector('[data-block="editor"] .blk-toggle').disabled, open: document.querySelectorAll('[data-block]:not([data-strip])').length })`)
   check('o último bloco aberto não recolhe', lastOpen.disabled === true && lastOpen.open === 1, lastOpen)
   await clickSel('a', '.blk-layout-menu')
