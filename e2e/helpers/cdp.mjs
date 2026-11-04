@@ -277,7 +277,8 @@ export class Tab {
   }
 
   fieldInput(label) {
-    return `[...document.querySelectorAll('label.field, .field')].find((f) => f.querySelector('span')?.textContent.trim() === ${JSON.stringify(label)})?.querySelector('input, textarea')`
+    // Campo com rótulo visível (.field) ou só com aria-label, como no formulário de entrar.
+    return `([...document.querySelectorAll('label.field, .field')].find((f) => f.querySelector('span')?.textContent.trim() === ${JSON.stringify(label)})?.querySelector('input, textarea') ?? document.querySelector(${JSON.stringify(`input[aria-label="${label}"], textarea[aria-label="${label}"]`)}))`
   }
 
   // Clica no campo pelo rótulo, limpa e digita tecla a tecla.

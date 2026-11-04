@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronRight, Copy, FileJson, ImagePlus, Loader2, Plus, Sparkles, Trash2, Upload } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Copy, FileJson, ImagePlus, Loader2, Minus, Plus, Sparkles, Trash2, Upload } from 'lucide-react'
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
@@ -211,49 +211,36 @@ export default function NewRoom() {
           <p className="muted">Uma prova por vez neste computador. Os alunos entram pelo seu IP, e tudo fica aqui.</p>
         </header>
 
-        <FoldCard title="Prova">
-          <Field label="Título">
-            <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Prova 1 de Algoritmos" />
-          </Field>
-          <div className="form-row">
-            {flow === 'free' && (
-              <Field label="Duração (min)">
-                <input className="input num" type="number" min={1} value={duration} onChange={(e) => setDuration(Math.max(1, Number(e.target.value)))} />
-              </Field>
-            )}
-            <Field label="Senha da sala">
-              <input className="input" type="password" autoComplete="new-password" placeholder="Opcional" value={password} onChange={(e) => setPassword(e.target.value)} />
-            </Field>
-          </div>
+        <FoldCard title="Prova" list>
+          <Setting label="Título">
+            <input className="input setting-wide" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Prova 1 de Algoritmos" aria-label="Título" />
+          </Setting>
+          {flow === 'free' && (
+            <Setting label="Duração">
+              <Stepper label="Duração" value={duration} min={1} max={600} step={5} unit="min" onChange={setDuration} />
+            </Setting>
+          )}
+          <Setting label="Senha da sala">
+            <input className="input setting-wide" type="password" autoComplete="new-password" placeholder="Opcional" aria-label="Senha da sala" value={password} onChange={(e) => setPassword(e.target.value)} />
+          </Setting>
         </FoldCard>
 
-        <FoldCard title="Formato">
-          <div className="field">
-            <span>Como é feita</span>
-            <Segmented stretch label="Como é feita" value={mode} onChange={setMode} options={[{ value: 'individual', label: 'Individual' }, { value: 'group', label: 'Em equipe' }]} />
-          </div>
+        <FoldCard title="Formato" list>
+          <Setting label="Como é feita">
+            <Segmented label="Como é feita" value={mode} onChange={setMode} options={[{ value: 'individual', label: 'Individual' }, { value: 'group', label: 'Em equipe' }]} />
+          </Setting>
           {mode === 'group' && (
-            <Field label="Máximo por equipe">
-              <input
-                className="input num short"
-                type="number"
-                min={MIN_TEAM}
-                max={MAX_TEAM}
-                value={teamSize}
-                onChange={(e) => setTeamSize(e.target.value)}
-                onBlur={() => setTeamSize(String(teamSizeOf(teamSize)))}
-              />
-            </Field>
+            <Setting label="Máximo por equipe">
+              <Stepper label="Máximo por equipe" value={teamSizeOf(teamSize)} min={MIN_TEAM} max={MAX_TEAM} unit="pessoas" onChange={(n) => setTeamSize(String(n))} />
+            </Setting>
           )}
-          <div className="field">
-            <span>Andamento</span>
-            <Segmented stretch label="Andamento" value={flow} onChange={setFlow} options={[{ value: 'free', label: 'Livre' }, { value: 'manual', label: 'Manual' }]} />
-          </div>
+          <Setting label="Andamento">
+            <Segmented label="Andamento" value={flow} onChange={setFlow} options={[{ value: 'free', label: 'Livre' }, { value: 'manual', label: 'Manual' }]} />
+          </Setting>
           {flow === 'free' && (
-            <div className="field">
-              <span>Início</span>
-              <Segmented stretch label="Início" value={timing} onChange={setTiming} options={[{ value: 'clock-in', label: 'Cada um no seu tempo' }, { value: 'global', label: 'Todos juntos' }]} />
-            </div>
+            <Setting label="Início">
+              <Segmented label="Início" value={timing} onChange={setTiming} options={[{ value: 'clock-in', label: 'Cada um no seu tempo' }, { value: 'global', label: 'Todos juntos' }]} />
+            </Setting>
           )}
         </FoldCard>
 
@@ -301,6 +288,48 @@ const LLMS_URL = 'https://oblita.giuli.dev/llms.txt'
 
 // Seção do formulário que recolhe pelo título. Recolhida, o conteúdo continua montado (nada do que foi digitado se perde).
 // `list` junta os itens sem espaço entre eles, separados por linha, como os interruptores da vigilância.
+// Uma linha de ajuste: o nome à esquerda e o controle à direita, como na Vigilância.
+function Setting({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="setting">
+      <span>{label}</span>
+      {children}
+    </div>
+  )
+}
+
+// Número com − e +: a duração e o tamanho da equipe quase sempre andam de pouco em pouco.
+function Stepper({ label, value, min, max, step = 1, unit, onChange }: { label: string; value: number; min: number; max: number; step?: number; unit: string; onChange: (n: number) => void }) {
+  const clamp = (n: number) => Math.min(max, Math.max(min, Math.round(n)))
+  const [draft, setDraft] = useState(String(value))
+  useEffect(() => setDraft(String(value)), [value])
+  return (
+    <div className="stepper">
+      <button type="button" aria-label={`Menos ${unit}`} disabled={value <= min} onClick={() => onChange(clamp(value - step))}>
+        <Minus size={16} />
+      </button>
+      <label>
+        <input
+          className="num"
+          inputMode="numeric"
+          aria-label={label}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value.replace(/\D/g, '').slice(0, 4))}
+          onBlur={() => onChange(clamp(Number(draft) || min))}
+          onKeyDown={(e) => {
+            if (e.key === 'ArrowUp') (e.preventDefault(), onChange(clamp(value + step)))
+            if (e.key === 'ArrowDown') (e.preventDefault(), onChange(clamp(value - step)))
+          }}
+        />
+        <span>{unit}</span>
+      </label>
+      <button type="button" aria-label={`Mais ${unit}`} disabled={value >= max} onClick={() => onChange(clamp(value + step))}>
+        <Plus size={16} />
+      </button>
+    </div>
+  )
+}
+
 function FoldCard({ title, aside, list, children }: { title: string; aside?: ReactNode; list?: boolean; children: ReactNode }) {
   const [open, setOpen] = useState(true)
   const body = useId()

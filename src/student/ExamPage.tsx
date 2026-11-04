@@ -1,11 +1,12 @@
-import { Check, Copy, HardDrive, Lock, LoaderCircle, Maximize, MonitorOff, MonitorUp, RefreshCw, Send, WifiOff, X } from 'lucide-react'
+import { ArrowRight, Check, Copy, HardDrive, Lock, LoaderCircle, Maximize, MonitorOff, MonitorUp, RefreshCw, Send, WifiOff, X } from 'lucide-react'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { AnimatePresence, motion } from 'motion/react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import type { ChoiceQuestion, Question, TextQuestion } from '../../shared/exam'
 import { switchBuild, versionFix, type VersionFix } from '../lib/offline'
 import { formatClock, useObservable } from '../lib/store'
-import type { ConnectError } from '../net/link'
+import { parseAddress, type ConnectError } from '../net/link'
 import { BuildVersion } from '../ui/BuildVersion'
 import { DiaTextReveal } from '../ui/DiaTextReveal'
 import { useHideSiteHeader } from '../ui/SiteHeader'
@@ -144,42 +145,70 @@ function GateSteps({ current }: { current: number }) {
   )
 }
 
-function ConnectStep() {
-  const s = session
+// O último IP digitado neste computador: numa sala, quase sempre é o mesmo de novo.
+function lastIp() {
+  try {
+    return localStorage.getItem('oblita-last-ip') ?? ''
+  } catch {
+    return ''
+  }
+}
+
+// Entrar na prova em dois passos: onde é a prova (IP ou código), e quem é o aluno. A página inicial
+// usa este mesmo formulário dentro do card, e `onJoined` leva para a prova quando o professor aceita.
+export function JoinForm({ onJoined }: { onJoined?: () => void }) {
+  const s = useObservable(session)
   const issue = browserIssue()
   const saved = s.saved
-  // A página inicial manda o IP na URL; só preenche o campo, quem conecta continua sendo o clique.
   const [params] = useSearchParams()
   const ipParam = params.get('ip')?.trim() ?? ''
-  const nameRef = useRef<HTMLInputElement>(null)
   const [mode, setMode] = useState<'ip' | 'code'>(saved?.via.kind === 'rtc' ? 'code' : 'ip')
-  const [address, setAddress] = useState(saved?.via.kind === 'hub' ? saved.via.address : ipParam)
+  const [address, setAddress] = useState(saved?.via.kind === 'hub' ? saved.via.address : ipParam || lastIp())
   const [code, setCode] = useState(saved?.via.kind === 'rtc' ? saved.via.code : '')
   const [name, setName] = useState(saved?.name ?? '')
   const [enrollment, setEnrollment] = useState(saved?.enrollment ?? '')
   const [password, setPassword] = useState('')
   const [asked, setAsked] = useState(false)
   const [busy, setBusy] = useState(false)
-
-  useEffect(() => {
-    if (ipParam) nameRef.current?.focus()
-  }, [ipParam])
+  const [badPlace, setBadPlace] = useState(false)
+  // Quem já tem o lugar (voltou recusado, ou veio com o IP na URL) começa no segundo passo.
+  const [step, setStep] = useState<0 | 1>(saved || ipParam ? 1 : 0)
 
   // A sala é quem diz se tem senha. O campo fica depois de aparecer, senão some enquanto tenta de novo.
   if (!asked && (s.needsPassword || s.refused === 'password')) setAsked(true)
 
+  const joined = !!s.config && !s.refused
+  useEffect(() => {
+    if (joined) onJoined?.()
+  }, [joined, onJoined])
+
   const room = code.trim().toUpperCase()
-  const complete = !!name.trim() && (mode === 'code' ? !!room : !!address.trim()) && (!asked || !!password)
+  const place = mode === 'code' ? room : address.trim()
+  const complete = !!name.trim() && !!place && (!asked || !!password)
   // Do clique até o professor responder há a conexão e o Argon2id, que leva um instante.
   const entering = busy || (!!saved && s.linkState === 'online' && !s.refused)
+
+  const next = () => {
+    if (!place) return
+    if (mode === 'ip' && !parseAddress(place)) return setBadPlace(true)
+    setStep(1)
+  }
 
   // Precisa partir do clique: é ele que permite ao navegador perguntar sobre a rede local.
   const submit = async (e: FormEvent) => {
     e.preventDefault()
+    if (step === 0) return next()
     if (!complete || busy) return
     setBusy(true)
     try {
-      const via = mode === 'ip' ? ({ kind: 'hub', address: address.trim() } as const) : ({ kind: 'rtc', code: room } as const)
+      if (mode === 'ip') {
+        try {
+          localStorage.setItem('oblita-last-ip', place)
+        } catch {
+          // O último IP é só conveniência.
+        }
+      }
+      const via = mode === 'ip' ? ({ kind: 'hub', address: place } as const) : ({ kind: 'rtc', code: room } as const)
       await s.begin(via, mode === 'code' ? room : '', name, enrollment, undefined, password)
     } finally {
       setBusy(false)
@@ -189,44 +218,54 @@ function ConnectStep() {
   const error = s.refused ? (REFUSED[s.refused] ?? 'O professor recusou a conexão.') : s.connectError ? CONNECT_ERROR[s.connectError] : null
   const [switched] = useState(readSwitched)
 
+  if (issue) return <div className="errbox" role="alert">{issue}</div>
+
   return (
-    <div className="center-screen">
-      <form className="gate" onSubmit={submit}>
-        <h1>Entrar na prova</h1>
-        {issue ? (
-          <div className="errbox" role="alert">{issue}</div>
-        ) : (
-          <>
+    <form className="join" onSubmit={submit}>
+      <div className="join-progress" aria-hidden="true">
+        <i className="done" />
+        <i className={step === 1 ? 'done' : ''} />
+      </div>
+      <AnimatePresence mode="wait" initial={false}>
+        {step === 0 ? (
+          <motion.div key="place" className="join-step" {...STEP_MOTION}>
+            <h2>Onde é a prova?</h2>
             <Segmented
-              stretch
               label="Como entrar"
               value={mode}
-              onChange={setMode}
+              onChange={(m) => {
+                setMode(m)
+                setBadPlace(false)
+              }}
               options={[
                 { value: 'ip', label: 'IP do professor' },
                 { value: 'code', label: 'Código da sala' },
               ]}
             />
-            {mode === 'ip' ? (
-              <Field label="IP do professor" hint="Está no quadro ou na janela do programa do professor.">
-                <input className="input mono" inputMode="url" autoComplete="off" spellCheck={false} placeholder="192.168.0.10" value={address} onChange={(e) => setAddress(e.target.value)} />
-              </Field>
-            ) : (
-              <Field label="Código da sala" hint="Só quando o professor abriu a sala pelo navegador.">
-                <input className="input mono" autoComplete="off" spellCheck={false} placeholder="ABC234" value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} />
-              </Field>
-            )}
-            <Field label="Nome">
-              <input ref={nameRef} className="input" autoComplete="off" maxLength={60} placeholder="Como o professor vai te ver" value={name} onChange={(e) => setName(e.target.value)} />
-            </Field>
-            <Field label="Matrícula (opcional)">
-              <input className="input" autoComplete="off" maxLength={30} placeholder="2024001234" value={enrollment} onChange={(e) => setEnrollment(e.target.value)} />
-            </Field>
-            {asked && (
-              <Field label="Senha da sala" hint="O professor passa no quadro.">
-                <input className="input" type="password" autoFocus autoComplete="off" value={password} onChange={(e) => setPassword(e.target.value)} />
-              </Field>
-            )}
+            <div className="join-inline">
+              {mode === 'ip' ? (
+                <input key="ip" className="input join-big mono" autoFocus inputMode="decimal" autoComplete="off" spellCheck={false} aria-label="IP do professor" aria-invalid={badPlace} placeholder="192.168.0.10" value={address} onChange={(e) => (setAddress(e.target.value), setBadPlace(false))} />
+              ) : (
+                <input key="code" className="input join-big mono" autoFocus autoComplete="off" spellCheck={false} aria-label="Código da sala" placeholder="ABC234" value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} />
+              )}
+              <Pill type="submit" tone="primary" size="lg" disabled={!place} aria-label="Continuar">
+                <ArrowRight size={18} />
+              </Pill>
+            </div>
+            {badPlace && <div className="bad small" role="alert">Esse IP não parece certo. Confira no quadro.</div>}
+          </motion.div>
+        ) : (
+          <motion.div key="who" className="join-step" {...STEP_MOTION}>
+            <button type="button" className="join-place" onClick={() => setStep(0)} disabled={entering} title="Trocar">
+              <span className="mono">{place}</span>
+              <span className="muted">trocar</span>
+            </button>
+            <h2>Quem é você?</h2>
+            <div className="join-row">
+              <input className="input join-big" autoFocus autoComplete="off" maxLength={60} aria-label="Nome" placeholder="Seu nome" value={name} onChange={(e) => setName(e.target.value)} />
+              <input className="input join-big" autoComplete="off" maxLength={30} aria-label="Matrícula (opcional)" placeholder="Matrícula" value={enrollment} onChange={(e) => setEnrollment(e.target.value)} />
+            </div>
+            {asked && <input className="input join-big" type="password" autoFocus autoComplete="off" aria-label="Senha da sala" placeholder="Senha da sala" value={password} onChange={(e) => setPassword(e.target.value)} />}
             {switched && !error && <div className="infobox" role="status">Esta página voltou para a versão {switched}, a mesma do professor. Entre de novo.</div>}
             {error && <div className="errbox" role="alert">{error}</div>}
             {s.refused === 'version' && s.teacherProtocol !== null && <VersionFixBox protocol={s.teacherProtocol} auto />}
@@ -234,9 +273,25 @@ function ConnectStep() {
               {entering && <LoaderCircle size={16} className="spin" />}
               {entering ? 'Entrando…' : 'Entrar'}
             </Pill>
-          </>
+          </motion.div>
         )}
-      </form>
+      </AnimatePresence>
+    </form>
+  )
+}
+
+const STEP_MOTION = {
+  initial: { opacity: 0, x: 16, filter: 'blur(4px)' },
+  animate: { opacity: 1, x: 0, filter: 'blur(0px)', transition: { duration: 0.28, ease: [0.16, 1, 0.3, 1] } },
+  exit: { opacity: 0, x: -12, filter: 'blur(4px)', transition: { duration: 0.14 } },
+} as const
+
+function ConnectStep() {
+  return (
+    <div className="center-screen">
+      <div className="gate">
+        <JoinForm />
+      </div>
     </div>
   )
 }

@@ -1,12 +1,10 @@
 import { AnimatePresence, motion } from 'motion/react'
-import { ArrowRight, GraduationCap, Presentation } from 'lucide-react'
-import { useEffect, useState, type FormEvent } from 'react'
+import { GraduationCap, LoaderCircle, Presentation, X } from 'lucide-react'
+import { Suspense, lazy, useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { idb } from '../lib/idb'
 import { unpinBuild } from '../lib/offline'
-import { parseAddress } from '../net/link'
 import { Eagle } from '../ui/Eagle'
-import { Pill } from '../ui/kit'
 
 // O lucide não traz mais logos de marca: o do GitHub vai aqui, em 16 px.
 function GithubMark() {
@@ -17,11 +15,22 @@ function GithubMark() {
   )
 }
 
+// O formulário mora no pacote da prova: abrir o card já começa a baixar o que o aluno vai usar.
+const JoinForm = lazy(() => import('../student/ExamPage').then((m) => ({ default: m.JoinForm })))
+const loadJoin = () => void import('../student/ExamPage')
+
+const FADE = {
+  initial: { opacity: 0, filter: 'blur(10px)', scale: 0.98 },
+  animate: { opacity: 1, filter: 'blur(0px)', scale: 1, transition: { duration: 0.35, ease: [0.16, 1, 0.3, 1] } },
+  exit: { opacity: 0, filter: 'blur(10px)', scale: 0.98, transition: { duration: 0.2 } },
+} as const
+const MORPH = { type: 'spring', bounce: 0.18, duration: 0.55 } as const
+
 export function Home() {
   const nav = useNavigate()
-  const [role, setRole] = useState<'student' | null>(null)
-  const [ip, setIp] = useState('')
-  const [invalid, setInvalid] = useState(false)
+  const [joining, setJoining] = useState(false)
+  const close = useCallback(() => setJoining(false), [])
+  const joined = useCallback(() => nav('/entrar'), [nav])
 
   // Sem prova em andamento neste computador, nenhuma versão precisa ficar fixada.
   useEffect(() => {
@@ -32,70 +41,55 @@ export function Home() {
   }, [])
 
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem('oblita-last-ip')
-      if (saved) setIp(saved)
-    } catch {
-      // Navegador sem armazenamento: só não preenche o campo.
-    }
-  }, [])
-
-  const enter = (e: FormEvent) => {
-    e.preventDefault()
-    if (!parseAddress(ip)) return setInvalid(true)
-    try {
-      localStorage.setItem('oblita-last-ip', ip.trim())
-    } catch {
-      // Idem: o último IP é só conveniência.
-    }
-    nav(`/entrar?ip=${encodeURIComponent(ip.trim())}`)
-  }
+    if (!joining) return
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && close()
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [joining, close])
 
   return (
     <div className="home">
       <main className="home-hero">
-        <Eagle size={112} className="home-eagle" />
-        <h1 className="home-title">
-          <span className="home-line">provas online de</span> <span className="home-line">código <span className="home-word">sem cola.</span></span>
-        </h1>
-        <div className="role-grid">
-          <motion.button type="button" className="role-card" aria-expanded={role === 'student'} onClick={() => setRole('student')} whileTap={{ scale: 0.99 }} hidden={role === 'student'}>
-            <GraduationCap size={28} />
-            <b>Sou aluno</b>
-          </motion.button>
-          <AnimatePresence initial={false}>
-            {role === 'student' && (
-              <motion.form key="ip" className="role-card role-form" onSubmit={enter} initial={{ opacity: 0, scale: 0.9, filter: 'blur(8px)' }} animate={{ opacity: 1, scale: 1, filter: 'blur(0px)' }} transition={{ type: 'spring', bounce: 0.25, duration: 0.6 }}>
-                <label className="field" style={{ width: '100%' }}>
-                  <span>IP do professor</span>
-                  <input
-                    className="input mono"
-                    autoFocus
-                    inputMode="decimal"
-                    autoComplete="off"
-                    placeholder="192.168.0.10"
-                    value={ip}
-                    aria-invalid={invalid}
-                    onChange={(e) => {
-                      setIp(e.target.value)
-                      setInvalid(false)
-                    }}
-                  />
-                </label>
-                {invalid && <div className="bad small">IP inválido</div>}
-                <Pill tone="primary" size="lg" type="submit" style={{ width: '100%' }}>
-                  Entrar <ArrowRight size={16} />
-                </Pill>
-                <Link to="/entrar" className="small muted">
-                  Entrar com código
+        <AnimatePresence mode="popLayout" initial={false}>
+          {!joining && (
+            <motion.div key="intro" className="home-intro" {...FADE}>
+              <Eagle size={112} className="home-eagle" />
+              <h1 className="home-title">
+                <span className="home-line">provas online de</span> <span className="home-line">código <span className="home-word">sem cola.</span></span>
+              </h1>
+            </motion.div>
+          )}
+        </AnimatePresence>
+        <div className="role-grid" data-joining={joining || undefined}>
+          {joining ? (
+            <motion.div layoutId="student-card" className="role-card join-panel" style={{ borderRadius: 28 }} transition={MORPH}>
+              <motion.div className="join-panel-body" initial={{ opacity: 0 }} animate={{ opacity: 1, transition: { delay: 0.18, duration: 0.25 } }}>
+                <button type="button" className="join-close" aria-label="Voltar" onClick={close}>
+                  <X size={18} />
+                </button>
+                <Suspense fallback={<LoaderCircle size={20} className="spin join-wait" />}>
+                  <JoinForm onJoined={joined} />
+                </Suspense>
+              </motion.div>
+            </motion.div>
+          ) : (
+            <motion.button layoutId="student-card" type="button" className="role-card" style={{ borderRadius: 28 }} transition={MORPH} onPointerEnter={loadJoin} onFocus={loadJoin} onClick={() => setJoining(true)} whileTap={{ scale: 0.99 }}>
+              <motion.span className="role-card-body" initial={{ opacity: 0 }} animate={{ opacity: 1, transition: { delay: 0.15 } }}>
+                <GraduationCap size={28} />
+                <b>Sou aluno</b>
+              </motion.span>
+            </motion.button>
+          )}
+          <AnimatePresence mode="popLayout" initial={false}>
+            {!joining && (
+              <motion.div key="teacher" className="role-slot" {...FADE}>
+                <Link to="/nova" className="role-card brand">
+                  <Presentation size={28} />
+                  <b>Sou professor</b>
                 </Link>
-              </motion.form>
+              </motion.div>
             )}
           </AnimatePresence>
-          <Link to="/nova" className="role-card brand">
-            <Presentation size={28} />
-            <b>Sou professor</b>
-          </Link>
         </div>
       </main>
       <footer className="home-foot">

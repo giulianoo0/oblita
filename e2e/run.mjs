@@ -227,8 +227,8 @@ async function homeToForm(tab) {
   await tab.clickText('Sou aluno')
   await tab.waitFor(`!!(${tab.fieldInput('IP do professor')})`)
   await tab.fill('IP do professor', hubAddr)
-  await tab.clickText('Entrar')
-  await tab.waitText('Entrar na prova')
+  await tab.clickSel('.join-inline .pill')
+  await tab.waitText('Quem é você?')
 }
 
 async function fillIdentity(tab, key) {
@@ -421,8 +421,9 @@ async function s3Students() {
   await say('Ana entra pelo IP da rede local')
   await must('Ana: da página inicial para IP, nome e matrícula', async () => {
     await homeToForm(A)
-    assert(/^(\d+\.){3}\d+(:\d+)?$/.test(await A.ev(`${A.fieldInput('IP do professor')}.value`)), 'IP não chegou preenchido')
-    assert((await A.ev(`${A.fieldInput('IP do professor')}.value`)).startsWith(lan), 'não é o IP da LAN')
+    const chosen = await A.ev(`document.querySelector('.join-place .mono')?.textContent ?? ''`)
+    assert(/^(\d+\.){3}\d+(:\d+)?$/.test(chosen), 'IP não chegou preenchido')
+    assert(chosen.startsWith(lan), 'não é o IP da LAN')
     await fillIdentity(A, 'a')
     await A.shot('05-entrar')
     await A.clickText('Entrar')
