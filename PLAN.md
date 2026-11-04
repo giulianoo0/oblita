@@ -39,6 +39,8 @@ Os casos mais prováveis de morder alguém de verdade, que nenhum teste unitári
 
 **Atualização:** o núcleo de cifra, token, policy, equipes, Yjs e selo já está em `shared/`, `src/collab/`, `src/student/session.ts` e `src/teacher/room.ts`, com 30 testes passando. As Tarefas 1, 1B (passos 1 a 7) e 1C (passos 1 a 4) estão feitas no núcleo. Dois subagents ligam as telas: aluno (`CodeWorkspace`, `ExamPage`, `collabEditor.ts`) e professor (`NewRoom`, `Dashboard`, `StudentDetail`, `exportZip`). A Tarefa 2 está com o subagent do professor. O aluno entra só com o IP: o código da sala vem no `hi`.
 
+**Modo manual, contagem, Dia reveal e imagens:** no ar. Motor testado (`node tests/engine/run.mjs`, 11 cenários). As telas desse fluxo ainda não passaram pelo teste automático.
+
 **Publicado:** https://oblita.giuli.dev está no ar (Worker `oblita`, domínio próprio). `node e2e/prod.mjs` passa 24 de 24: site, embeds, sinalização em produção e o caminho do aluno com o domínio inacessível (abre pelo cache, alcança o hub pelo IP, compilador carrega). Faltando: a permissão de rede local foi concedida por script, então o pedido real ao usuário ainda não foi visto. `navigator.storage.persist()` volta falso em origem nova, então o cache pode ser despejado se o disco lotar. Publicar de novo: `npx vite build --outDir dist-deploy --emptyOutDir`, `node scripts/postbuild.mjs dist-deploy`, `npx wrangler deploy --assets dist-deploy`. O `wrangler` está logado por OAuth nesta máquina, com escopo amplo: o dono pode rodar `npx wrangler logout` no fim.
 
 Concluído e sem execução completa no navegador até agora:
@@ -124,6 +126,27 @@ Ver SPEC, seção 9.
 - [ ] **Passo 6:** painel: `Dashboard` mostra por equipe cada integrante com um ponto de estado e o rótulo "desfocado", e chip "selo ausente" no ladrilho.
 - [ ] **Passo 7:** E2E: enviar um PNG falso ou nenhum, e ver `beacon-missing`; adulterar `status` para sempre ok e ver o selo acusar.
 - [ ] **Validação real (dono):** medir falso positivo do selo com escala de tela de 125% e 150% no Windows e em 1366×768.
+
+### Tarefa 1D: Modo livre ou manual
+
+**Feita, salvo o passo 7 pelas telas.** Núcleo e telas ligados, testados em `node tests/engine/run.mjs --only=11`. Ver SPEC, seção 12.
+
+**Arquivos:** modificar `shared/protocol.ts`, `shared/policy.ts`, `src/teacher/room.ts`, `src/student/session.ts`, `src/teacher/NewRoom.tsx`, `src/teacher/Dashboard.tsx`, `src/student/ExamPage.tsx`, `src/student/CodeWorkspace.tsx`.
+
+**Interfaces**
+- Consome de `shared/flow.ts`: `Flow`, `QuestionClocks`, `visibleExam`, `isOpen`, `release`, `withdraw`, `addTime`, `expiredQuestions`.
+- `RoomConfig.flow: Flow` e `StudentRoomConfig.flow: Flow`.
+- `Room.clocks: QuestionClocks`, salvo no snapshot. É da sala, não da equipe.
+- `room.releaseQuestion(id, minutes?)`, `room.withdrawQuestion(id)`, `room.addQuestionTime(id, minutes)`.
+- A mensagem `exam` leva só as questões visíveis, mais `clocks`, e é reenviada a todos a cada mudança. `endsAt` passa a aceitar `null` no manual.
+
+- [ ] **Passo 1:** `seedDoc` semeia só o que está visível, e semeia ao liberar.
+- [ ] **Passo 2:** `maybeSendExam` usa `visibleExam`. No manual, a sala não exige `endsAt` nem bate ponto.
+- [ ] **Passo 3:** ao fechar uma questão: extrair, gravar em `team.submissions`, corrigir. `checkClock` usa `expiredQuestions`. Entrega, rascunho e teste de questão fechada ou não visível são negados, com o número de sequência avançando.
+- [ ] **Passo 4:** `NewRoom`: Segmented Livre | Manual. No manual, some o "Início".
+- [ ] **Passo 5:** `Dashboard`: no manual, lista de questões com minutos, Liberar, Retirar, +1 min, e relógio de cada uma ao vivo.
+- [ ] **Passo 6:** aluno: tela de espera "Aguardando o professor" sem questão liberada, relógio por questão, editor somente leitura na questão esgotada, aviso curto quando uma questão é liberada ou retirada.
+- [ ] **Passo 7:** E2E: nada vaza antes de liberar (DOM, IndexedDB e documento Yjs do aluno); liberar e retirar ao vivo; tempo esgotado congela a resposta; edição depois de fechar não muda a nota; F5 do aluno e do painel mantêm os relógios; aluno que entra depois vê só o liberado.
 
 ### Tarefa 2: Sala com senha e prova única
 
@@ -211,6 +234,12 @@ Falta credencial. Pergunte ao dono qual prefere, e não crie token sem ele pedir
 - [ ] **Passo 6:** apagar `.cf-token` do scratchpad, e lembrar o dono de revogar as chaves da conversa.
 
 ### Tarefa 9: Validação no mundo real
+
+Pendências do teste automático, em `e2e/REPORT.md`:
+
+- Alerta "Saiu da aba" atrasou 39 s no teste automático, sem causa conhecida. O dono mandou seguir: conferir em máquina real.
+- Passos 8 e 9 pelas telas não foram repetidos depois das correções. Zip e player pelas telas nunca rodaram.
+
 
 Só o dono consegue fazer isso, com outras máquinas.
 

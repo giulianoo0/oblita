@@ -38,6 +38,7 @@ T.createRoom = async (o: any, exam: any, solutions: any, addr: string, token: st
     roomId,
     title: exam.title,
     mode: o.mode ?? 'individual',
+    flow: o.flow ?? 'free',
     timing: o.timing ?? 'global',
     compiler: o.compiler ?? true,
     requireIsolation: o.requireIsolation ?? false,

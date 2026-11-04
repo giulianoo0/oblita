@@ -216,11 +216,29 @@ A prova só é enviada a quem já está pronto (tela, tela cheia, sem segundo mo
 - Cada execução tem seu worker, encerrado no limite de tempo.
 - **Limites do compilador:** sem exceções de C++. `try/catch` compila, mas um `throw` executado encerra com mensagem clara, inclusive `vector::at` e `stoi`. Recursão profunda estoura antes do nativo. Sem rede, threads e arquivos.
 
-## 12. Tempo
+## 12. Andamento e tempo
 
-- **Início:** `clock-in` (cada um começa quando quiser, com a duração inteira, e o grupo divide o relógio) ou `global`.
-- **Relógio:** sincronia estilo NTP com o professor a cada 15 s, ficando com a medida de menor atraso. Depois da primeira medida é monotônico, então mudar a hora do computador não dá tempo extra.
-- **Quem encerra é sempre o professor.** Ao encerrar, os rascunhos viram entrega.
+Dois modos, escolhidos ao criar a sala. Quem controla e encerra é sempre o professor. O dono descartou o relógio por questão iniciado pelo aluno.
+
+| Modo | Questões | Tempo |
+|---|---|---|
+| **Livre** | Todas liberadas de uma vez | Duração total. Início `clock-in` (cada um quando quiser) ou `global` (todos juntos). Encerra sozinho ao acabar |
+| **Manual** | O professor libera e retira cada questão, ao vivo | O professor define o tempo de cada questão ao liberar (opcional), pode somar tempo e fechar antes. Sem relógio geral: acaba quando ele encerra |
+
+**Regras do modo manual**
+
+- Vale igual para toda a sala: liberar e retirar afeta todos juntos.
+- **Revelação:** ao liberar, os alunos veem uma contagem de 3 s em tela inteira. O conteúdo só sai do professor quando ela acaba, então não dá para ler antes pelo DevTools, e o tempo da questão começa nesse instante. Depois o título aparece grande com o Dia text reveal (`src/ui/DiaTextReveal.tsx`, trazido do lawcore), e o enunciado varre na sequência. Quem entra depois recebe a questão sem contagem.
+- Questão não liberada nunca chega ao aluno: nem título, nem enunciado, nem exemplos, nem código inicial.
+- O código inicial só entra no documento da equipe quando a questão é liberada.
+- **Ao fechar uma questão** (tempo acabou ou o professor retirou), o professor congela a resposta naquele instante e corrige aquela versão. Edições posteriores são ignoradas. O CRDT não rejeita uma atualização por questão, então o congelamento é feito na entrega, no professor.
+- Questão com o tempo esgotado fica visível e somente leitura. Questão retirada some da tela do aluno.
+- Retirar e liberar de novo é permitido: a questão volta com o que já tinha, e a entrega é refeita ao fechar outra vez.
+- O aluno que entra depois recebe o que estiver liberado naquele momento.
+
+**Relógio:** sincronia estilo NTP com o professor a cada 15 s, ficando com a medida de menor atraso. Depois da primeira medida é monotônico, então mudar a hora do computador não dá tempo extra.
+
+**Imagens:** o enunciado aceita imagem embutida em base64 (png, jpeg, webp, gif), e o montador reduz para até 1600 px. Endereço externo e SVG são recusados. Prova com até 12 MB.
 
 ## 13. Equipes e edição colaborativa
 

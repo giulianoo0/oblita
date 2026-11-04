@@ -171,9 +171,13 @@ async function compileOnce(i: number) {
 }
 
 const BURNERS: (Promise<RunResult> & { kill: () => void })[] = []
+let burnWasm: Uint8Array<ArrayBuffer> | null = null
+// Compila antes e separado: a otimização do clang em segundo plano sujaria a medida de CPU.
+async function burnPrepare() {
+  burnWasm = await mustCompile('c', 'int main(void) { volatile int x = 1; while (x) { } return 0; }\n')
+}
 async function burnStart(n: number) {
-  const wasm = await mustCompile('c', 'int main(void) { volatile int x = 1; while (x) { } return 0; }\n')
-  for (let i = 0; i < n; i++) BURNERS.push(run(wasm, '', 120_000))
+  for (let i = 0; i < n; i++) BURNERS.push(run(burnWasm as Uint8Array<ArrayBuffer>, '', 120_000))
   return n
 }
 async function burnStop() {
@@ -184,8 +188,7 @@ async function burnStop() {
   return { killMs: Math.round(performance.now() - t0), all: res.every((r) => /Interrompido/.test(r.error ?? '')) }
 }
 async function burnTimeout(n: number, ms: number) {
-  const wasm = await mustCompile('c', 'int main(void) { volatile int x = 1; while (x) { } return 0; }\n')
-  const res = await Promise.all(Array.from({ length: n }, () => run(wasm, '', ms)))
+  const res = await Promise.all(Array.from({ length: n }, () => run(burnWasm as Uint8Array<ArrayBuffer>, '', ms)))
   return res.every((r) => r.timedOut)
 }
 
@@ -206,7 +209,9 @@ function workerCompile(w: Worker, args: string[], files: Record<string, string>)
   })
 }
 
-const median = (a: number[]) => [...a].sort((x, y) => x - y)[a.length >> 1]
+// O mínimo resiste melhor à carga de outros processos na máquina do que a mediana.
+const best = (a: number[]) => Math.min(...a)
+const STUB = 'extern "C" { void *__cxa_allocate_exception(unsigned long) { return 0; } void __cxa_throw(void *, void *, void (*)(void *)) { __builtin_trap(); } }\n'
 const LINK = ['-Wl,-z,stack-size=8388608', '-Wl,--max-memory=268435456']
 const HELLO_C = '#include <stdio.h>\nint main(void) { puts("oi"); return 0; }\n'
 const BENCH_CPP = `#include <algorithm>
@@ -238,14 +243,23 @@ async function benchFlags() {
   const mk = () => new Worker(new URL('./flags.worker.ts', import.meta.url), { type: 'module' })
   // cada worker novo busca e compila o llvm.core.wasm de novo: esse é o custo a frio
   let w = mk()
-  const c1 = await workerCompile(w, ['clang', '-std=c17', '-O1', 'main.c', '-o', 'main.wasm', '-lm', ...LINK], { 'main.c': HELLO_C })
+  const COLD_C = ['clang', '-std=c17', '-O1', 'main.c', '-o', 'main.wasm', '-lm', ...LINK]
+  const coldC: number[] = []
+  for (let i = 0; i < 3; i++) {
+    w.terminate()
+    w = mk()
+    coldC.push(Math.round((await workerCompile(w, COLD_C, { 'main.c': HELLO_C })).ms))
+  }
   const warmC: number[] = []
-  for (let i = 0; i < 4; i++) warmC.push((await workerCompile(w, ['clang', '-std=c17', '-O1', 'main.c', '-o', 'main.wasm', '-lm', ...LINK], { 'main.c': HELLO_C })).ms)
+  for (let i = 0; i < 4; i++) warmC.push((await workerCompile(w, COLD_C, { 'main.c': HELLO_C })).ms)
+  out.c = { frioMs: coldC, mornoMs: Math.round(best(warmC)) }
   w.terminate()
-  out.c = { frioMs: Math.round(c1.ms), mornoMs: Math.round(median(warmC)), ok: c1.ok }
   w = mk()
-  const c2 = await workerCompile(w, ['clang++', '-std=c++20', '-O1', 'main.cpp', '-o', 'main.wasm', '-lm', ...LINK], { 'main.cpp': STL_SRC })
-  out.cppStl = { frioMs: Math.round(c2.ms), ok: c2.ok, log: clip(c2.log, 200) }
+  const COLD_CPP = ['clang++', '-std=c++20', '-O1', 'main.cpp', 'rt.cpp', '-o', 'main.wasm', '-lm', ...LINK]
+  const c2 = await workerCompile(w, COLD_CPP, { 'main.cpp': STL_SRC, 'rt.cpp': STUB })
+  const warmCpp: number[] = []
+  for (let i = 0; i < 6; i++) warmCpp.push((await workerCompile(w, COLD_CPP, { 'main.cpp': STL_SRC, 'rt.cpp': STUB })).ms)
+  out.cppStl = { frioMs: Math.round(c2.ms), mornoMs: warmCpp.map(Math.round), ok: c2.ok, log: clip(c2.log, 200) }
   const table: Record<string, unknown> = {}
   for (const [name, flag] of [['O0', ['-O0']], ['O1', ['-O1']], ['O2', ['-O2']], ['O0-lto', ['-O0', '-flto', '-Wl,--lto-O0']], ['O1-lto', ['-O1', '-flto', '-Wl,--lto-O1']], ['O1-lto-null', ['-O1', '-flto', '-Wl,--lto-O1', '-fsanitize=null', '-fsanitize-trap=null']]] as [string, string[]][]) {
     const stl: number[] = []
@@ -256,8 +270,8 @@ async function benchFlags() {
     let benchCMs = -1
     let wasm: Uint8Array<ArrayBuffer> | null = null
     let wasmC: Uint8Array<ArrayBuffer> | null = null
-    for (let i = 0; i < 3; i++) {
-      const r = await workerCompile(w, ['clang++', '-std=c++20', ...flag, 'main.cpp', '-o', 'main.wasm', '-lm', ...LINK], { 'main.cpp': BENCH_CPP })
+    for (let i = 0; i < 4; i++) {
+      const r = await workerCompile(w, ['clang++', '-std=c++20', ...flag, 'main.cpp', 'rt.cpp', '-o', 'main.wasm', '-lm', ...LINK], { 'main.cpp': BENCH_CPP, 'rt.cpp': STUB })
       stl.push(r.ms)
       wasm = r.wasm
       log = r.log
@@ -275,7 +289,7 @@ async function benchFlags() {
         times.push(performance.now() - t0)
         if (r.error) log += ` erro: ${r.error}`
       }
-      benchMs = Math.round(median(times))
+      benchMs = Math.round(best(times))
     }
     if (wasmC) {
       const times: number[] = []
@@ -284,9 +298,9 @@ async function benchFlags() {
         await run(wasmC, '', 60_000)
         times.push(performance.now() - t0)
       }
-      benchCMs = Math.round(median(times))
+      benchCMs = Math.round(best(times))
     }
-    table[name] = { compileStlMs: Math.round(median(stl)), compileCMs: Math.round(median(cc)), wasmKb: Math.round(size / 1024), runCppMs: benchMs, runCMs: benchCMs, log: clip(log, 160) }
+    table[name] = { compileStlMs: Math.round(best(stl)), compileCMs: Math.round(best(cc)), wasmKb: Math.round(size / 1024), runCppMs: benchMs, runCMs: benchCMs, log: clip(log, 160) }
   }
   out.flags = table
   // NULL com -fsanitize=null: vale como proteção?
@@ -310,6 +324,7 @@ const t = {
   runCase,
   sanity,
   compileOnce,
+  burnPrepare,
   burnStart,
   burnStop,
   burnTimeout,

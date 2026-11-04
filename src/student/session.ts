@@ -1,6 +1,7 @@
 // Sessão do aluno, fora do React: sobrevive a re-renderização e é restaurada depois de um F5.
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from 'y-protocols/awareness'
 import { decodeFrame, encodeBinary, encodeJson } from '../../shared/frames'
+import { isOpen, type QuestionClocks } from '../../shared/flow'
 import { SEALED_TAG, SecureChannel, deriveRoomKey, fingerprint, fromB64, helloTranscript, newEphemeral, sha256Hex, toB64, tokenProof, verifyHello } from '../../shared/secure'
 import type { Exam } from '../../shared/exam'
 import {
@@ -55,6 +56,7 @@ interface Saved {
   groupId?: string
   exam?: Exam
   endsAt?: number
+  clocks?: QuestionClocks
   clockOffset?: number
   // Guardada para um F5 com o professor fora do ar ainda abrir a prova com as regras certas.
   config?: StudentRoomConfig
@@ -96,6 +98,7 @@ export class StudentSession extends Observable {
   needsPassword = false
   teacherFp: string | null = null
   beaconCode: number | null = null
+  countdownEnds = 0
   doc = new ExamDoc()
   awareness = new Awareness(this.doc.doc)
   resumed = false
@@ -181,6 +184,15 @@ export class StudentSession extends Observable {
     return s.screen && s.fullscreen && !s.extended && (!this.config?.requireIsolation || s.isolated === true)
   }
 
+  questionOpen(questionId: string) {
+    return isOpen(this.config?.flow ?? 'free', this.saved?.clocks?.[questionId], this.serverNow())
+  }
+
+  questionRemaining(questionId: string) {
+    const endsAt = this.saved?.clocks?.[questionId]?.endsAt
+    return endsAt ? endsAt - this.serverNow() : null
+  }
+
   // O relógio do professor é o que vale, então mudar a hora da máquina não dá tempo extra.
   remaining() {
     const saved = this.saved
@@ -192,6 +204,8 @@ export class StudentSession extends Observable {
     const saved = await idb.get<Saved>('kv', 'student')
     if (!saved?.active) return false
     this.saved = saved
+    // Número de segmento pulado não faz mal; repetido sobrescreveria um trecho da gravação.
+    saved.segment += 1
     this.teacherFp = saved.teacherFp ?? null
     this.resumed = true
     if (saved.docState) this.doc.apply(fromB64(saved.docState), 'load')
@@ -447,6 +461,7 @@ export class StudentSession extends Observable {
     s.groupId = undefined
     s.exam = undefined
     s.endsAt = undefined
+    s.clocks = undefined
     s.config = undefined
     s.docState = undefined
     s.finished = undefined
@@ -487,7 +502,8 @@ export class StudentSession extends Observable {
       case 'exam':
         if (this.saved) {
           this.saved.exam = msg.exam
-          this.saved.endsAt = msg.endsAt
+          this.saved.endsAt = msg.endsAt ?? undefined
+          this.saved.clocks = msg.clocks
           if (!this.clockAt) this.saved.clockOffset = msg.now - Date.now()
           void this.persist()
         }
@@ -541,6 +557,9 @@ export class StudentSession extends Observable {
           // Cursor é descartável.
         }
         break
+      case 'countdown':
+        if (Number.isFinite(msg.seconds) && msg.seconds > 0 && msg.seconds <= 10) this.countdownEnds = performance.now() + msg.seconds * 1000
+        break
       case 'beacon':
         this.beaconCode = msg.code
         window.setTimeout(() => void this.sendBeaconFrame(msg.code), BEACON_DELAY_MS)
@@ -584,6 +603,13 @@ export class StudentSession extends Observable {
       const cur = s.answers[id]
       if (!cur || draft.rev > cur.rev) s.answers[id] = draft
     }
+    // O disco é assíncrono: um F5 logo depois de um evento volta com números velhos. Reusar um número
+    // que o professor já viu faria o próximo alerta ser confirmado e descartado.
+    if (msg.lastEvent > s.eventSeq) {
+      s.eventSeq = msg.lastEvent
+      if (msg.lastEventHash) s.lastHash = msg.lastEventHash
+    }
+    if (msg.lastRec > s.recSeq) s.recSeq = msg.lastRec
     void this.onAck('event', msg.lastEvent)
     void this.onAck('rec', msg.lastRec).then(() => {
       // O documento vai antes das entregas pendentes: o professor corrige a partir dele.
@@ -805,7 +831,7 @@ export class StudentSession extends Observable {
 
   setAnswer(questionId: string, answer: Answer) {
     const s = this.saved
-    if (!s) return
+    if (!s || !this.questionOpen(questionId)) return
     const rev = (s.answers[questionId]?.rev ?? 0) + 1
     s.answers[questionId] = { answer, rev }
     void this.persist()

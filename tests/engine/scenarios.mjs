@@ -250,7 +250,7 @@ async function s2(h) {
   })
 
   await h.case('config sem códigos e sem lista de equipes', async () => {
-    const allowed = ['compiler', 'durationMin', 'maxTeamSize', 'mode', 'recordScreen', 'requireIsolation', 'timing', 'title']
+    const allowed = ['compiler', 'durationMin', 'flow', 'maxTeamSize', 'mode', 'recordScreen', 'requireIsolation', 'timing', 'title']
     for (const p of [a, b, c]) {
       const welcome = await p.call(() => T.rxAll('welcome')[0])
       eq(Object.keys(welcome.config).sort(), allowed, `${p.name}: campos da configuração`)
@@ -430,6 +430,8 @@ async function s3b(h) {
     eq(await c.call(() => T.txPlain()), 0, 'nada saiu para o impostor')
     eq(await c.call(() => T.s.saved.teacherFp), before, 'a chave fixada não muda')
     eq((await c.view()).hasLink, false, 'conexão fechada')
+    // Não é asserção: fica visível no log o que a recusa faz com a sessão de quem foi alvo.
+    console.log(`        nota: depois do hi forjado, sessão ativa = ${await c.call(() => T.s.saved.active)}, restore() = ${await c.call(() => new T.StudentSession().restore())}`)
     clean(c, w.t)
   })
 
@@ -1575,7 +1577,7 @@ async function s8(h) {
       await p.until(() => T.s.pendingUploads() === 0, [], { what: `${p.name} sem pendências`, timeout: 5000 })
     }
     clean(d, a, b, w.t)
-  })
+  }, 60_000)
 
   const w2 = await world(h)
   const e = await joined(h, 'Eva')
@@ -1862,6 +1864,14 @@ async function s10(h) {
     return b ? { fails: b.fails, everOk: b.everOk, codes: b.codes.length } : null
   }, cid)
 
+  await h.case('miniaturas chegam pelo caminho real de sendFrame', async () => {
+    await w.t.until((cid) => T.room.thumbs.has(cid), [d.cid], { what: 'miniatura', timeout: 8000 })
+    await w.t.call((cid) => T.room.setFocus(cid), d.cid)
+    await w.t.until((cid) => T.room.liveFrame.has(cid), [d.cid], { what: 'quadro ao vivo', timeout: 5000 })
+    await w.t.call(() => T.room.setFocus(null))
+    await d.until(() => !T.s.focusOn, [], { what: 'foco desligado' })
+  })
+
   await h.case('selo: PNG real decodificado pelo professor', async () => {
     await w.t.until((cid) => T.room.students.get(cid).beaconOk === true, [d.cid], { what: 'selo aceito', timeout: 10_000 })
     const st = await state(d.cid)
@@ -1934,6 +1944,122 @@ async function s10(h) {
   }, 45_000)
 }
 
+// ---- 11. modo manual
+
+async function s11(h) {
+  const w = await world(h, { flow: 'manual', mode: 'individual' })
+  const ids = (p) => p.call(() => T.s.exam.questions.map((q) => q.id))
+  let a, b
+
+  await h.case('manual: nada chega antes de liberar', async () => {
+    a = await joined(h, 'Ana')
+    await start(w)
+    await a.until(() => !!T.s.exam, [], { what: 'prova vazia' })
+    eq(await ids(a), [], 'nenhuma questão')
+    eq((await w.sum()).endsAt, null, 'sem relógio geral')
+    eq(await a.call(() => T.snap('q1')), null, 'código inicial fora do documento')
+    const dump = await a.call(() => T.dumpIdb())
+    for (const leak of [CANARY.statement, 'STARTER_Q1', 'Soma', 'Explique', 'Capital']) assert(!dump.includes(leak), `vazou ${leak}`)
+    clean(w.t, a)
+  })
+
+  await h.case('durante a contagem o conteúdo ainda não saiu do professor', async () => {
+    await w.t.call(() => T.room.releaseQuestion('q1'))
+    await a.until(() => T.s.countdownEnds > performance.now(), [], { what: 'contagem no aluno', timeout: 2500 })
+    eq(await ids(a), [], 'nada ainda')
+    assert(!(await a.call(() => T.dumpIdb())).includes(`Soma`), 'título não vazou')
+    eq(await w.t.call(() => T.room.clocks.q1 ?? null), null, 'relógio só começa na revelação')
+    await w.t.call(() => T.room.releaseQuestion('q1'))
+    eq(await w.t.call(() => T.room.releasing.size), 1, 'clique duplo não libera duas vezes')
+  })
+
+  await h.case('liberar entrega só a escolhida, com o código inicial uma vez', async () => {
+    await a.until(() => T.s.exam.questions.length === 1 && !!T.s.doc.snapshot('q1'), [], { what: 'q1 liberada' })
+    eq(await ids(a), ['q1'], 'só q1')
+    eq(countOf(await a.call(() => T.code('q1', 'main.c')), 'STARTER_Q1'), 1, 'código inicial uma vez')
+    eq(await a.call(() => T.snap('q2')), null, 'q2 continua fora')
+    const dump = await a.call(() => T.dumpIdb())
+    for (const leak of ['Dobro', 'STARTER_Q2', 'Capital']) assert(!dump.includes(leak), `vazou ${leak}`)
+  })
+
+  await h.case('quem chega depois recebe só o que está liberado', async () => {
+    b = await joined(h, 'Beto')
+    await b.until(() => !!T.s.exam && !!T.s.doc.snapshot('q1'), [], { what: 'Beto com q1' })
+    eq(await ids(b), ['q1'], 'só q1')
+  })
+
+  await h.case('retirar congela a resposta, e editar depois não muda a nota', async () => {
+    await a.call((c) => T.setCode('q1', 'main.c', c), SUM_OK)
+    await w.t.until((cid, c) => T.room.teamOf(T.room.students.get(cid)).answers.q1?.answer.files['main.c'] === c, [a.cid, SUM_OK], { what: 'professor com o código', timeout: 8000 })
+    await w.t.call(() => T.room.withdrawQuestion('q1'))
+    await a.until(() => T.s.exam.questions.length === 0, [], { what: 'q1 some do aluno' })
+    await a.call((c) => T.setCode('q1', 'main.c', c), SUM_WRONG)
+    await sleep(1500)
+    const team = await w.team(a.cid)
+    eq(team.submissions.q1.answer.files['main.c'], SUM_OK, 'entrega congelada')
+    const grade = await w.t.until((cid) => { const g = T.gradeOf(cid, 'q1'); return g?.status === 'done' ? g : null }, [a.cid], { what: 'corrigida', timeout: 60_000 })
+    eq(grade.points, 10, 'nota da versão congelada')
+  }, 90_000)
+
+  await h.case('liberar de novo volta com o que tinha', async () => {
+    await w.t.call(() => T.room.releaseQuestion('q1'))
+    await a.until(() => T.s.exam.questions.length === 1, [], { what: 'q1 de volta' })
+    eq(await a.call(() => T.code('q1', 'main.c')), SUM_WRONG, 'mantém o texto')
+    eq(await a.call(() => T.s.questionOpen('q1')), true, 'aberta')
+  })
+
+  await h.case('tempo esgotado fecha, mantém visível e nega rascunho', async () => {
+    await w.t.call(() => T.room.releaseQuestion('q4', 1))
+    await a.until(() => T.s.exam.questions.some((q) => q.id === 'q4'), [], { what: 'q4 liberada' })
+    await a.call(() => T.s.setAnswer('q4', { type: 'text', text: 'dentro do tempo' }))
+    await w.t.until((cid) => T.room.teamOf(T.room.students.get(cid)).answers.q4?.answer.text === 'dentro do tempo', [a.cid], { what: 'rascunho', timeout: 8000 })
+    await w.t.call(() => { T.room.clocks = { ...T.room.clocks, q4: { ...T.room.clocks.q4, endsAt: Date.now() + 200 } } })
+    await w.t.until(() => T.room.clocks.q4.closed === true, [], { what: 'fechou', timeout: 8000 })
+    await a.until(() => T.s.saved.clocks.q4?.closed === true, [], { what: 'aluno sabe' })
+    assert((await ids(a)).includes('q4'), 'continua visível')
+    eq(await a.call(() => T.s.questionOpen('q4')), false, 'fechada no aluno')
+    await a.call(() => T.raw({ t: 'draft', questionId: 'q4', answer: { type: 'text', text: 'fora do tempo' }, rev: 999 }))
+    await sleep(800)
+    const team = await w.team(a.cid)
+    eq(team.answers.q4.answer.text, 'dentro do tempo', 'rascunho negado')
+    eq(team.submissions.q4.answer.text, 'dentro do tempo', 'entrega congelada')
+  })
+
+  await h.case('somar tempo reabre', async () => {
+    await w.t.call(() => T.room.addQuestionTime('q4', 1))
+    await a.until(() => T.s.questionOpen('q4'), [], { what: 'reabriu' })
+  })
+
+  await h.case('teste de questão fechada é recusado sem gastar o minuto', async () => {
+    await w.t.call(() => T.room.withdrawQuestion('q1'))
+    await a.until(() => !T.s.exam.questions.some((q) => q.id === 'q1'), [], { what: 'q1 fora' })
+    await a.call(() => T.raw({ t: 'test', reqId: 'x', questionId: 'q1', lang: 'c', files: { 'main.c': 'int main(void){return 0;}' } }))
+    await a.until(() => T.s.testReport?.log === 'Esta questão está fechada', [], { what: 'recusa', timeout: 6000 })
+    eq(await w.t.call(() => T.room.lastTest.size), 0, 'minuto não gasto')
+  })
+
+  await h.case('F5 do painel mantém os relógios', async () => {
+    const before = await w.t.call(() => JSON.stringify(T.room.clocks))
+    await sleep(1300)
+    await w.t.call((addr, token) => T.reloadRoom(addr, token), h.hubLocal, TOKEN)
+    eq(await w.t.call(() => JSON.stringify(T.room.clocks)), before, 'relógios iguais')
+    await a.live()
+    await a.until(() => T.s.exam.questions.some((q) => q.id === 'q4'), [], { what: 'q4 depois de recarregar' })
+    await sane(w)
+    clean(w.t, a, b)
+  })
+
+  await h.case('encerrar mantém a versão congelada do que já fechou', async () => {
+    await w.t.call(() => T.room.end())
+    await sleep(800)
+    const team = await w.team(a.cid)
+    // q1 foi retirada de novo com o texto errado: é essa versão que vale, e encerrar não a refaz.
+    eq(team.submissions.q1.answer.files['main.c'], SUM_WRONG, 'última versão congelada')
+    assert(!!team.closed, 'fechada')
+    await sane(w)
+  })
+}
+
 export const scenarios = [
   ['1 aperto de mão', s1],
   ['2 confidencialidade', s2],
@@ -1947,4 +2073,5 @@ export const scenarios = [
   ['8 confiabilidade', s8],
   ['9 correção', s9],
   ['10 estado e selo', s10],
+  ['11 modo manual', s11],
 ]

@@ -1,11 +1,12 @@
 // Motor da sala, no navegador do professor. O gabarito só existe aqui: nenhuma mensagem
 // enviada ao aluno é construída a partir de `solutions`, e a prova só sai por examForStudent.
 import { BEACON, decodeBeacon, randomBeaconCode } from '../../shared/beacon'
-import { checkOutput, defaultStarter, examForStudent, mainFile, type CodeQuestion, type Exam, type HiddenTest, type Solutions } from '../../shared/exam'
+import { checkOutput, defaultStarter, mainFile, type CodeQuestion, type Exam, type HiddenTest, type Solutions } from '../../shared/exam'
 import { decodeFrame, encodeBinary, encodeJson } from '../../shared/frames'
 import {
   ALERT_LABEL,
   ALERT_SEVERE,
+  REVEAL_COUNTDOWN_SECONDS,
   MAX_Y_UPDATE_BYTES,
   HOST_RUN_INTERVAL_MS,
   PROTOCOL_VERSION,
@@ -29,6 +30,7 @@ import { RateLimiter, isAllowed } from '../../shared/policy'
 import { SecureChannel, deriveRoomKey, fingerprint, helloTranscript, newTeacherIdentity, signHello, verifyTokenProof, type TeacherIdentity, fromB64, newEphemeral, randomBytes, sha256Hex, toB64, type Ephemeral } from '../../shared/secure'
 import { idb, requestPersistence } from '../lib/idb'
 import { Observable, randomId } from '../lib/store'
+import { addTime, expiredQuestions, isOpen, isVisible, release, visibleExam, withdraw, type Flow, type QuestionClocks } from '../../shared/flow'
 import { ExamDoc } from '../collab/examDoc'
 import { connectHubBus, connectRtcBus, type Bus } from '../net/bus'
 import { compile, run } from '../compiler/client'
@@ -157,6 +159,7 @@ interface Snapshot {
   hasPassword: boolean
   teamCodes: [string, string][]
   identity: TeacherIdentity
+  clocks?: QuestionClocks
   students: Student[]
   teams: Team[]
   alerts: AlertEntry[]
@@ -193,6 +196,11 @@ export class Room extends Observable {
   private queuedGrades = new Set<string>()
   private recChains = new Map<string, Promise<unknown>>()
   private eventChains = new Map<string, Promise<unknown>>()
+  // Relógio de cada questão no modo manual. É da sala: liberar e retirar vale para todos juntos.
+  clocks: QuestionClocks = {}
+  // Em contagem: o conteúdo só sai do professor quando ela acaba, então nada pode ser lido antes.
+  releasing = new Set<string>()
+  private chainUnknown = new Set<string>()
   private salt = ''
   hasPassword = false
   private tabLockRelease: (() => void) | null = null
@@ -242,6 +250,8 @@ export class Room extends Observable {
     room.config = snap.config
     room.exam = snap.exam
     room.solutions = snap.solutions
+    room.config.flow ??= 'free'
+    room.clocks = snap.clocks ?? {}
     room.phase = snap.phase
     room.endsAt = snap.endsAt
     room.roomCode = snap.roomCode
@@ -254,6 +264,7 @@ export class Room extends Observable {
     room.teamCodes = new Map(snap.teamCodes)
     // Os endereços blob: das miniaturas morrem com a aba.
     room.alerts = snap.alerts.map((a) => ({ ...a, thumb: undefined }))
+    for (const s of snap.students) room.chainUnknown.add(s.clientId)
     for (const s of snap.students)
       room.students.set(s.clientId, { ...s, peer: null, online: false, signalLost: false, status: noStatus() })
     for (const t of snap.teams) room.teams.set(t.key, t)
@@ -290,6 +301,7 @@ export class Room extends Observable {
       hasPassword: this.hasPassword,
       teamCodes: [...this.teamCodes],
       identity: this.identity,
+      clocks: this.clocks,
       createdAt: this.createdAt,
       students: [...this.students.values()],
       teams: [...this.teams.values()].map((t) => {
@@ -540,11 +552,11 @@ export class Room extends Observable {
         this.onEvent(s, msg.event)
         break
       case 'draft':
-        if (this.validAnswer(msg.questionId, msg.answer)) this.onDraft(s, msg.questionId, msg.answer, msg.rev)
+        if (this.validAnswer(msg.questionId, msg.answer) && this.questionOpen(msg.questionId)) this.onDraft(s, msg.questionId, msg.answer, msg.rev)
         break
       case 'submit':
         // O número entra mesmo se a resposta for lixo, senão o fluxo do aluno trava aqui.
-        if (this.accept(s, msg.seq) && this.validAnswer(msg.questionId, msg.answer)) {
+        if (this.accept(s, msg.seq) && this.validAnswer(msg.questionId, msg.answer) && this.questionOpen(msg.questionId)) {
           const team = this.teamOf(s)
           // O código vem do documento da equipe, que já está em ordem neste mesmo canal.
           const answer = msg.answer.type === 'code' ? (this.docOf(team).snapshot(msg.questionId) ?? msg.answer) : msg.answer
@@ -679,6 +691,7 @@ export class Room extends Observable {
       config: {
         title: this.config.title,
         mode: this.config.mode,
+        flow: this.flow,
         timing: this.config.timing,
         durationMin: this.exam.durationMin,
         compiler: this.config.compiler,
@@ -689,6 +702,7 @@ export class Room extends Observable {
       token: issued,
       phase: team.closed ? 'ended' : this.phase,
       lastEvent: s.lastEvent,
+      lastEventHash: s.lastHash,
       lastRec: s.lastRec,
       team: this.teamInfo(s.groupId),
       drafts: this.phase === 'lobby' ? undefined : nonCodeAnswers(team),
@@ -726,8 +740,18 @@ export class Room extends Observable {
     return st.screen && st.fullscreen && !st.extended && (!this.config.requireIsolation || st.isolated === true)
   }
 
+  get flow(): Flow {
+    return this.config.flow ?? 'free'
+  }
+
+  questionOpen(questionId: string) {
+    return isOpen(this.flow, this.clocks[questionId], Date.now())
+  }
+
   // O horário de fim de cada um. No clock-in é por pessoa ou grupo; o do grupo vale para todos.
+  // No manual não existe: acaba quando o professor encerra.
   endsAtOf(s: Student) {
+    if (this.flow === 'manual') return null
     if (this.config.timing === 'global') return this.endsAt
     return this.teamOf(s).endsAt ?? null
   }
@@ -747,7 +771,8 @@ export class Room extends Observable {
   // A prova só sai para quem já está sob vigilância. Quem não está pronto segue esperando.
   private maybeSendExam(s: Student) {
     const endsAt = this.endsAtOf(s)
-    if (this.phase !== 'running' || s.examSent || !s.peer || !endsAt || s.finishedAt) return
+    if (this.phase !== 'running' || s.examSent || !s.peer || s.finishedAt) return
+    if (!endsAt && this.flow !== 'manual') return
     if (this.config.mode === 'group' && !s.groupId) return
     if (this.teamOf(s).closed || !this.ready(s)) return
     s.examSent = true
@@ -756,9 +781,71 @@ export class Room extends Observable {
     this.seedDoc(this.teamOf(s))
     // Salva antes de soltar: um F5 sem o código inicial em disco semearia de novo, e o texto duplicaria no aluno.
     const send = () => {
-      if (s.peer === peer && s.examSent) this.sendTo(peer, { t: 'exam', exam: examForStudent(this.exam), endsAt, now: Date.now() })
+      if (s.peer === peer && s.examSent) this.sendExam(s)
     }
     void this.save().then(send, send)
+  }
+
+  private sendExam(s: Student) {
+    if (s.peer) this.sendTo(s.peer, { t: 'exam', exam: visibleExam(this.exam, this.flow, this.clocks), endsAt: this.endsAtOf(s), clocks: this.clocks, now: Date.now() })
+  }
+
+  // Salva o código inicial antes de soltar, pelo mesmo motivo de maybeSendExam.
+  private broadcastExam() {
+    for (const team of this.teams.values()) {
+      if ([...this.students.values()].some((s) => s.examGranted && this.teamKey(s) === team.key)) this.seedDoc(team)
+    }
+    const send = () => {
+      for (const s of this.students.values()) if (s.examSent) this.sendExam(s)
+    }
+    void this.save().then(send, send)
+    this.touch()
+  }
+
+  // ---- modo manual: o professor libera e retira cada questão
+
+  releaseQuestion(questionId: string, minutes?: number) {
+    if (this.phase !== 'running' || this.flow !== 'manual' || !this.exam.questions.some((q) => q.id === questionId)) return
+    if (this.releasing.has(questionId)) return
+    this.releasing.add(questionId)
+    for (const s of this.students.values()) if (s.examSent) this.sendToStudent(s, { t: 'countdown', seconds: REVEAL_COUNTDOWN_SECONDS })
+    this.changed()
+    window.setTimeout(() => {
+      this.releasing.delete(questionId)
+      if (this.phase !== 'running') return this.changed()
+      // O tempo da questão começa aqui, na revelação, e não no clique.
+      this.clocks = release(this.clocks, questionId, Date.now(), minutes)
+      this.broadcastExam()
+    }, REVEAL_COUNTDOWN_SECONDS * 1000)
+  }
+
+  withdrawQuestion(questionId: string) {
+    if (this.flow !== 'manual' || !this.clocks[questionId]) return
+    if (!this.clocks[questionId].closed) this.freezeQuestion(questionId)
+    this.clocks = withdraw(this.clocks, questionId)
+    this.broadcastExam()
+  }
+
+  addQuestionTime(questionId: string, minutes: number) {
+    if (this.flow !== 'manual') return
+    this.clocks = addTime(this.clocks, questionId, minutes, Date.now())
+    this.broadcastExam()
+  }
+
+  // A resposta que vale é a deste instante. O documento segue aceitando atualizações, porque o CRDT
+  // não separa por questão, mas nada do que vier depois entra na entrega.
+  private freezeQuestion(questionId: string) {
+    for (const team of this.teams.values()) {
+      try {
+        this.extractAnswers(team)
+      } catch (err) {
+        console.error('falha ao extrair respostas', team.key, err)
+      }
+      const draft = team.answers[questionId]
+      if (!draft) continue
+      team.submissions[questionId] = { answer: draft.answer, at: Date.now(), by: team.submissions[questionId]?.by ?? 'rascunho' }
+      this.enqueueGrade(team, questionId)
+    }
   }
 
   private closeTeam(team: Team) {
@@ -772,7 +859,8 @@ export class Room extends Observable {
     }
     for (const [questionId, draft] of Object.entries(team.answers)) {
       // O código vale como está no fim: quem entregou antes não congela o que os colegas fizeram depois.
-      if (!team.submissions[questionId] || draft.answer.type === 'code') {
+      // A exceção é a questão fechada no modo manual, que já tem a versão congelada dela.
+      if (!team.submissions[questionId] || (draft.answer.type === 'code' && !this.clocks[questionId]?.closed)) {
         team.submissions[questionId] = { answer: draft.answer, at: Date.now(), by: team.submissions[questionId]?.by ?? 'rascunho' }
         this.enqueueGrade(team, questionId)
       }
@@ -791,7 +879,9 @@ export class Room extends Observable {
     if (!this.accept(s, event.seq)) return
     const prev = this.eventChains.get(s.clientId) ?? Promise.resolve()
     const check = prev.then(async () => {
-      if (!(await verifyChain(s.lastHash, event))) s.chainBroken = true
+      // Este painel recarregou e pode ter salvo um hash mais antigo: não é adulteração de ninguém.
+      const anchored = !this.chainUnknown.delete(s.clientId)
+      if (anchored && !(await verifyChain(s.lastHash, event))) s.chainBroken = true
       s.lastHash = event.hash
     })
     this.eventChains.set(s.clientId, check.catch(() => {}))
@@ -847,6 +937,15 @@ export class Room extends Observable {
   private checkClock() {
     if (this.phase !== 'running') return
     const now = Date.now()
+    if (this.flow === 'manual') {
+      const expired = expiredQuestions(this.clocks, now)
+      for (const id of expired) {
+        this.freezeQuestion(id)
+        this.clocks = { ...this.clocks, [id]: { ...this.clocks[id], closed: true } }
+      }
+      if (expired.length) this.broadcastExam()
+      return
+    }
     if (this.config.timing === 'global') {
       if (this.endsAt && now >= this.endsAt) this.end()
       return
@@ -1027,7 +1126,8 @@ export class Room extends Observable {
   private seedDoc(team: Team) {
     const doc = this.docOf(team)
     for (const q of this.exam.questions) {
-      if (q.type !== 'code') continue
+      // O código inicial também é conteúdo da questão: só entra no documento quando ela é liberada.
+      if (q.type !== 'code' || !isVisible(this.flow, this.clocks[q.id])) continue
       const lang = q.languages[0]
       doc.seed(q.id, lang, mainFile(lang), q.starter?.[lang] ?? defaultStarter(lang))
     }
@@ -1087,7 +1187,7 @@ export class Room extends Observable {
     const doc = this.docs.get(team.key)
     if (!doc) return
     for (const q of this.exam.questions) {
-      if (q.type !== 'code') continue
+      if (q.type !== 'code' || this.clocks[q.id]?.closed) continue
       const answer = doc.snapshot(q.id)
       if (!answer || !validFiles(answer.files)) continue
       team.answers[q.id] = { answer, rev: (team.answers[q.id]?.rev ?? 0) + 1 }
@@ -1189,7 +1289,7 @@ export class Room extends Observable {
   start() {
     if (this.phase !== 'lobby') return
     this.phase = 'running'
-    if (this.config.timing === 'global') this.endsAt = Date.now() + this.exam.durationMin * 60_000
+    if (this.flow === 'free' && this.config.timing === 'global') this.endsAt = Date.now() + this.exam.durationMin * 60_000
     for (const s of this.students.values()) {
       this.sendToStudent(s, { t: 'phase', phase: 'running' })
       this.maybeSendExam(s)
@@ -1303,6 +1403,7 @@ export class Room extends Observable {
     if (this.phase !== 'running' || !this.config.compiler || q?.type !== 'code' || !s.examSent) return
     // Sem resposta o botão do aluno ficaria preso. Não gasta o minuto dele.
     if (!q.languages.includes(msg.lang) || !validFiles(msg.files)) return report({ reqId, questionId, status: 'compile-error', log: 'Arquivos fora do limite', nextInMs: 0 })
+    if (!this.questionOpen(questionId)) return report({ reqId, questionId, status: 'compile-error', log: 'Esta questão está fechada', nextInMs: 0 })
     const key = this.teamKey(s)
     const wait = (this.lastTest.get(key) ?? 0) + TEST_INTERVAL_MS - Date.now()
     if (wait > 0) return report({ reqId, questionId, status: 'limited', retryInMs: wait })

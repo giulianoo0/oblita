@@ -19,7 +19,8 @@ function throttle(): Plugin {
           res.end('ok')
           return
         }
-        if (!bps || !url.pathname.startsWith('/node_modules/@yowasp/clang/gen/') || url.pathname.endsWith('.js')) return next()
+        // ?import&url é o módulo JS que o Vite gera para o new URL do pacote, não o arquivo em si
+        if (!bps || url.search || !url.pathname.startsWith('/node_modules/@yowasp/clang/gen/') || url.pathname.endsWith('.js')) return next()
         const file = join(ROOT, url.pathname)
         res.setHeader('Content-Type', file.endsWith('.wasm') ? 'application/wasm' : 'application/octet-stream')
         res.setHeader('Content-Length', statSync(file).size)
@@ -31,7 +32,7 @@ function throttle(): Plugin {
           setTimeout(() => stream.resume(), 100)
         })
         stream.on('end', () => res.end())
-        req.on('close', () => stream.destroy())
+        res.on('close', () => stream.destroy())
       })
     },
   }

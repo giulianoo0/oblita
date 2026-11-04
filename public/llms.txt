@@ -62,7 +62,7 @@ Campos:
 - `durationMin`: duração em minutos.
 - `questions[].id`: único na prova. Use `q1`, `q2`, e assim por diante.
 - `questions[].type`: `code`, `choice` ou `text`.
-- `questions[].statement`: Markdown.
+- `questions[].statement`: Markdown com `**negrito**`, `` `código` ``, blocos de código e imagens. Imagem precisa estar embutida: `![descrição](data:image/png;base64,...)`, em png, jpeg, webp ou gif. Endereço externo é recusado, porque a prova roda sem internet. A prova inteira pode ter até 12 MB.
 - `questions[].points`: maior que zero.
 - `code.languages`: `["c"]`, `["cpp"]` ou ambos.
 - `code.starter`: código inicial por linguagem. Opcional.

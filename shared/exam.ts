@@ -91,6 +91,12 @@ function findForbidden(v: unknown, path = '$'): string | null {
   return null
 }
 
+// Sem internet na prova, imagem só existe embutida. SVG fica de fora: pode carregar script.
+export const IMAGE_MARKDOWN = /!\[([^\]]*)\]\((data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+)\)/
+const FOREIGN_IMAGE = /!\[[^\]]*\]\((?!data:image\/(?:png|jpeg|webp|gif);base64,)/
+// Vai inteira numa só mensagem, e o hub limita o quadro do professor a 16 MiB.
+export const MAX_EXAM_CHARS = 12 * 1024 * 1024
+
 const str = (v: unknown) => typeof v === 'string' && v.trim().length > 0
 const positive = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v > 0
 
@@ -99,6 +105,7 @@ export function validateExam(raw: unknown): { exam?: Exam; errors: string[] } {
   if (!isObj(raw)) return { errors: ['O arquivo precisa ser um objeto JSON.'] }
   const leaked = findForbidden(raw)
   if (leaked) return { errors: [`A prova não pode ter gabarito: ${leaked}`] }
+  if (JSON.stringify(raw).length > MAX_EXAM_CHARS) return { errors: ['A prova passa de 12 MB. Use imagens menores.'] }
   if (raw.version !== 1) errors.push('version precisa ser 1.')
   if (!str(raw.title)) errors.push('title é obrigatório.')
   if (!positive(raw.durationMin)) errors.push('durationMin precisa ser maior que zero.')
@@ -115,6 +122,7 @@ export function validateExam(raw: unknown): { exam?: Exam; errors: string[] } {
     else ids.add(q.id as string)
     if (!str(q.title)) errors.push(`${at}.title é obrigatório.`)
     if (!str(q.statement)) errors.push(`${at}.statement é obrigatório.`)
+    else if (FOREIGN_IMAGE.test(q.statement as string)) errors.push(`${at}.statement: imagem precisa estar embutida em base64 (png, jpeg, webp ou gif).`)
     if (!positive(q.points)) errors.push(`${at}.points precisa ser maior que zero.`)
     if (q.type === 'code') {
       const langs = q.languages

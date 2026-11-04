@@ -120,7 +120,9 @@ export class Proctor {
       if (document.visibilityState === 'hidden') this.fire('tab-hidden')
       this.emit()
     })
-    on('blur', () => {
+    on('blur', (e) => {
+      // Em captura, o blur de qualquer campo da página também passa aqui: só o da janela é sair dela.
+      if (e.target !== window) return
       this.fire('focus-lost')
       this.emit()
     })

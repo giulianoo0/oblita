@@ -1,4 +1,4 @@
-import { ChevronDown, FileJson, Loader2, Plus, Sparkles, Trash2, Upload } from 'lucide-react'
+import { ChevronDown, FileJson, ImagePlus, Loader2, Plus, Sparkles, Trash2, Upload } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
@@ -11,7 +11,9 @@ import {
   type Solution,
   type Solutions,
 } from '../../shared/exam'
+import type { Flow } from '../../shared/flow'
 import { DEFAULT_TEAM_SIZE, type RoomMode, type Timing } from '../../shared/protocol'
+import { imageToMarkdown } from '../lib/image'
 import { randomId } from '../lib/store'
 import { Field, Logo, Pill, Segmented, Switch, browserIssue } from '../ui/kit'
 import { Room, activeRoom, registerRoom } from './room'
@@ -82,6 +84,7 @@ export default function NewRoom() {
   const [title, setTitle] = useState('')
   const [duration, setDuration] = useState(90)
   const [mode, setMode] = useState<RoomMode>('individual')
+  const [flow, setFlow] = useState<Flow>('free')
   const [timing, setTiming] = useState<Timing>('clock-in')
   const [compiler, setCompiler] = useState(true)
   const [isolation, setIsolation] = useState(true)
@@ -159,7 +162,8 @@ export default function NewRoom() {
           roomId,
           title: exam.title,
           mode,
-          timing,
+          flow,
+          timing: flow === 'manual' ? 'global' : timing,
           compiler,
           requireIsolation: isolation,
           recordScreen: record,
@@ -213,9 +217,11 @@ export default function NewRoom() {
             <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Prova 1 de Algoritmos" />
           </Field>
           <div className="row wrap">
-            <Field label="Minutos">
-              <input className="input num" style={{ width: '7rem' }} type="number" min={1} value={duration} onChange={(e) => setDuration(Math.max(1, Number(e.target.value)))} />
-            </Field>
+            {flow === 'free' && (
+              <Field label="Minutos">
+                <input className="input num" style={{ width: '7rem' }} type="number" min={1} value={duration} onChange={(e) => setDuration(Math.max(1, Number(e.target.value)))} />
+              </Field>
+            )}
             <div className="grow">
               <Field label="Senha da sala">
                 <input className="input" type="password" autoComplete="new-password" placeholder="Recomendada" value={password} onChange={(e) => setPassword(e.target.value)} />
@@ -228,9 +234,15 @@ export default function NewRoom() {
               <Segmented value={mode} onChange={setMode} options={[{ value: 'individual', label: 'Individual' }, { value: 'group', label: 'Em equipe' }]} />
             </div>
             <div className="field">
-              <span>Início</span>
-              <Segmented value={timing} onChange={setTiming} options={[{ value: 'clock-in', label: 'Cada um no seu tempo' }, { value: 'global', label: 'Todos juntos' }]} />
+              <span>Andamento</span>
+              <Segmented value={flow} onChange={setFlow} options={[{ value: 'free', label: 'Livre' }, { value: 'manual', label: 'Manual' }]} />
             </div>
+            {flow === 'free' && (
+              <div className="field">
+                <span>Início</span>
+                <Segmented value={timing} onChange={setTiming} options={[{ value: 'clock-in', label: 'Cada um no seu tempo' }, { value: 'global', label: 'Todos juntos' }]} />
+              </div>
+            )}
           </div>
           {mode === 'group' && (
             <div>
@@ -337,6 +349,7 @@ function DropFile({ label, onFile, done, disabled }: { label: string; onFile: (f
 
 function QuestionEditor({ index, draft: d, onChange, onRemove }: { index: number; draft: DraftQuestion; onChange: (p: Partial<DraftQuestion>) => void; onRemove?: () => void }) {
   const [showTests, setShowTests] = useState(false)
+  const imageInput = useRef<HTMLInputElement>(null)
   const setOption = (id: string, p: Partial<DraftQuestion['options'][number]>) => onChange({ options: d.options.map((o) => (o.id === id ? { ...o, ...p } : o)) })
   return (
     <div className="q-editor">
@@ -363,6 +376,24 @@ function QuestionEditor({ index, draft: d, onChange, onRemove }: { index: number
       <Field label="Enunciado">
         <textarea className="input" rows={4} value={d.statement} onChange={(e) => onChange({ statement: e.target.value })} />
       </Field>
+      <div>
+        <input
+          ref={imageInput}
+          hidden
+          type="file"
+          accept="image/png,image/jpeg,image/webp,image/gif"
+          onChange={async (e) => {
+            const file = e.target.files?.[0]
+            e.target.value = ''
+            if (!file) return
+            const markdown = await imageToMarkdown(file).catch(() => null)
+            if (markdown) onChange({ statement: `${d.statement.trimEnd()}\n\n${markdown}\n\n`.trimStart() })
+          }}
+        />
+        <Pill size="sm" onClick={() => imageInput.current?.click()}>
+          <ImagePlus size={14} /> Imagem
+        </Pill>
+      </div>
       {d.type === 'code' && (
         <>
           <div className="field">

@@ -15,6 +15,8 @@ const args = new Set(process.argv.slice(2))
 const VISIBLE = args.has('--visible')
 const SLOW = args.has('--slow')
 const NO_BUILD = args.has('--no-build')
+// Para depurar uma parte sem esperar a prova inteira: --only=1,2,3,4,7
+const ONLY = process.argv.find((a) => a.startsWith('--only='))?.slice(7).split(',')
 const SHOTS = join(ROOT, 'e2e', 'shots')
 const WATCHDOG_MS = (SLOW ? 60 : 30) * 60_000
 const ALERT_MAX_MS = 1500
@@ -77,6 +79,7 @@ async function section(title, fn, { fatal = false } = {}) {
     row('seção não executada', false, 'uma seção anterior impediu')
     return
   }
+  if (ONLY && !ONLY.includes(title.split(' ')[0])) return skip(title, '--only')
   try {
     await fn()
   } catch (err) {
@@ -557,7 +560,7 @@ async function s4Gate() {
   })
   await A.shot('13-espera')
   await check('o painel mostra o estado de Ana', async () => {
-    await T.waitFor(`![...document.querySelectorAll('.tile')].find((t) => t.querySelector('.tile-tag span')?.textContent === 'Ana')?.querySelector('.tile-corner .chip')`, { timeout: 8000, label: 'chips de Ana somem' })
+    await T.waitFor(`!/sem tela|testando rede|com internet|dois monitores/.test([...document.querySelectorAll('.tile')].find((t) => t.querySelector('.tile-tag span')?.textContent === 'Ana')?.innerText ?? 'sem tela')`, { timeout: 8000, label: 'pendências de Ana somem' })
   })
 
   await must('C compartilha e fica pronta', async () => {
@@ -670,8 +673,10 @@ async function s5Collab() {
     await putCode(A, PROGRAM)
     await B.clickSel('.file[title="main.c"] span')
     await waitEditor(B, `text.includes('printf("%d')`, 'programa em Bruno')
+    // O Monaco reindenta o que chega como digitação: o que importa é o texto, e quem compila confere o resto.
+    const flat = (t) => t.split('\n').map((l) => l.trim()).join('\n').trim()
     const text = await edText(A)
-    assert(norm(text) === norm(PROGRAM), { text, PROGRAM })
+    assert(flat(text) === flat(PROGRAM), { text, PROGRAM })
   })
   await A.shot('18-programa')
 
@@ -802,6 +807,9 @@ async function s6Terminal() {
 }
 
 async function s7Proctor() {
+  if (ONLY) {
+    await waitEditor(A, `text.includes('int main')`, 'editor')
+  }
   await armTeacherAudio()
   await sleep(1000)
 
@@ -845,6 +853,8 @@ async function s7Proctor() {
     const before = await alertCount('Ana', 'Saiu da janela')
     await expectAlert('Ana', 'Saiu da aba', async () => {
       extra = await aP.tab('about:blank', { boot: { focus: false } })
+      await sleep(200)
+      console.log('        visibilidade em Ana:', await A.ev(`({ v: document.visibilityState, f: document.hasFocus() })`))
     }, { title: 'aba escondida: alerta em até 1500 ms' })
     await check('blur da janela: alerta', async () => {
       await T.waitFor(`[...document.querySelectorAll('.alert-item')].filter((e) => e.querySelector('b')?.textContent === 'Ana' && e.querySelector('.kind')?.textContent === 'Saiu da janela').length > ${before}`, { timeout: 2000 })
@@ -929,6 +939,7 @@ async function s7Proctor() {
     await A.waitFor(`!document.querySelector('.lock-screen')`, { timeout: 5000 })
   })
   await T.shot('28-alertas')
+  await dumpAlerts('s7')
 
   // Com janela de verdade, Ana filma a tela real: quem exercita o selo é Bruno, com a trilha do teste.
   const seal = VISIBLE ? { name: 'Bruno', tab: B } : { name: 'Ana', tab: A }
@@ -954,6 +965,11 @@ async function s7Proctor() {
   })
 }
 
+async function dumpAlerts(tag) {
+  const all = await T.ev(`[...document.querySelectorAll('.alert-item')].map((e) => e.querySelector('time').textContent + ' ' + e.querySelector('b').textContent + ': ' + e.querySelector('.kind').textContent)`)
+  console.log(`        alertas ${tag}: ${all.join(' | ')}`)
+}
+
 async function s8Resilience() {
   await say('F5 de Ana no meio da prova')
   const before = norm(await edText(A))
@@ -964,6 +980,7 @@ async function s8Resilience() {
     const s = await A.ev(`({ password: [...document.querySelectorAll('.field span')].some((e) => e.textContent === 'Senha da sala'), screen: document.querySelector('.lock-screen').innerText.includes('compartilhada') || document.querySelector('.lock-screen').innerText.includes('Compartilhe'), exam: getComputedStyle(document.querySelector('.exam')).visibility })`)
     assert(!s.password && s.screen && s.exam === 'hidden', s)
   })
+  console.log('        depuração:', frames.a.filter((f) => /"t":"(welcome|ack)"/.test(f.text) && !/"stream":"rec"/.test(f.text)).slice(-6).map((f) => f.text.slice(0, 200).replace(/"config".*"lastEvent"/, '"lastEvent"')))
   await A.shot('30-depois-do-f5')
   await must('precisa compartilhar e voltar à tela cheia', async () => {
     await A.clickText('Compartilhar tela')
@@ -1101,7 +1118,7 @@ async function s9End() {
   }, { timeout: 200_000 })
   await A.shot('33-entregue')
   await check('fim da prova não gerou alerta falso', async () => {
-    const recent = await T.ev(`[...document.querySelectorAll('.alert-item')].slice(0, 6).map((e) => e.querySelector('.kind').textContent + ':' + e.querySelector('time').textContent)`)
+    const recent = await T.ev(`[...document.querySelectorAll('.alert-item')].slice(0, 12).map((e) => e.querySelector('b').textContent + ':' + e.querySelector('.kind').textContent + ':' + e.querySelector('time').textContent)`)
     console.log(`        últimos alertas: ${recent.join(', ')}`)
   })
 

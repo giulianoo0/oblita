@@ -107,7 +107,7 @@ export class Harness {
     let log = ''
     p.stdout.on('data', (d) => (log += d))
     p.stderr.on('data', (d) => (log += d))
-    p.on('exit', (code) => console.log(`  [vite saiu: ${code}] ${log.slice(-400)}`))
+    p.on('exit', (code) => this.closing || console.log(`  [vite saiu: ${code}] ${log.slice(-400)}`))
     this.origin = `http://localhost:${port}`
     this.pageUrl = `${this.origin}/tests/engine/page.html`
     for (let i = 0; i < 120; i++) {
@@ -143,7 +143,7 @@ export class Harness {
     let log = ''
     p.stdout.on('data', (d) => (log += d))
     p.stderr.on('data', (d) => (log += d))
-    p.on('exit', (code) => this.procs.hub === p && console.log(`  [hub saiu: ${code}] ${log.slice(-400)}`))
+    p.on('exit', (code) => this.closing || (this.procs.hub === p && console.log(`  [hub saiu: ${code}] ${log.slice(-400)}`)))
     for (let i = 0; i < 80; i++) {
       if (p.exitCode !== null) throw new Error(`hub saiu: ${log}`)
       try {
@@ -269,6 +269,7 @@ export class Harness {
   }
 
   async cleanup() {
+    this.closing = true
     try {
       await this.closeAll()
     } catch {}
@@ -279,7 +280,7 @@ export class Harness {
     killTree(this.procs.hub)
     killTree(this.procs.vite)
     if (this.userDir) {
-      for (let i = 0; i < 10 && existsSync(this.userDir); i++) {
+      for (let i = 0; i < 40 && existsSync(this.userDir); i++) {
         try {
           rmSync(this.userDir, { recursive: true, force: true })
         } catch {

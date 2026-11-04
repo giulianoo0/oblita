@@ -1,0 +1,103 @@
+:root {
+  --dia-1: #c679c4;
+  --dia-2: #fa3d1d;
+  --dia-3: #ffb005;
+  --dia-4: #e1e1fe;
+  --dia-5: #0358f7;
+  --duration-reveal: 1500ms;
+  --ease-reveal: cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+.dia-reveal {
+  display: inline-block;
+  background-size: 234% 100%;
+  background-repeat: no-repeat;
+  background-image: linear-gradient(
+    90deg,
+    var(--text) 0%,
+    var(--text) 42.735%,
+    var(--dia-1) 42.735%,
+    var(--dia-2) 46.368%,
+    var(--dia-3) 50%,
+    var(--dia-4) 53.632%,
+    var(--dia-5) 57.265%,
+    transparent 57.265%,
+    transparent 100%
+  );
+  color: transparent;
+  background-clip: text;
+  -webkit-background-clip: text;
+  animation: dia-sweep var(--duration-reveal) var(--ease-reveal) both;
+}
+
+.md p.dia-reveal {
+  display: block;
+}
+
+@keyframes dia-sweep {
+  from {
+    background-position-x: 100%;
+    filter: drop-shadow(0 0 10px color-mix(in srgb, var(--dia-1) 35%, transparent));
+  }
+  85% {
+    filter: drop-shadow(0 0 12px color-mix(in srgb, var(--dia-5) 22%, transparent));
+  }
+  to {
+    background-position-x: 0%;
+    filter: none;
+  }
+}
+
+.md img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0.625rem 0;
+  border-radius: var(--radius-xl);
+  cursor: zoom-in;
+}
+.md.revealing img,
+.md.revealing pre {
+  animation: settle-in 700ms var(--ease-out) 900ms backwards;
+}
+.md-zoom img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-xl);
+}
+
+.reveal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  display: grid;
+  place-items: center;
+  padding: 2rem;
+  background: var(--background);
+  text-align: center;
+  animation: settle-in var(--dur-base) var(--ease-out);
+}
+.reveal-count {
+  font-family: var(--font-serif);
+  font-size: clamp(6rem, 22vw, 16rem);
+  font-weight: 500;
+  line-height: 1;
+  color: var(--brand);
+}
+.reveal-title {
+  max-width: 18em;
+  font-family: var(--font-serif);
+  font-size: clamp(2rem, 6vw, 4.5rem);
+  font-weight: 500;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dia-reveal {
+    animation: none;
+    background-image: none;
+    color: var(--text);
+  }
+}

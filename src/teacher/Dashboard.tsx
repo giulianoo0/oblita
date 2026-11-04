@@ -249,10 +249,10 @@ function DashboardView({ room }: { room: Room }) {
         )}
         {room.phase === 'lobby' && (
           <Pill tone="brand" disabled={!room.bus} title={room.bus ? undefined : 'Conecte a sala primeiro'} onClick={() => room.start()}>
-            {room.config.timing === 'global' ? 'Começar' : 'Abrir prova'}
+            {room.config.timing === 'global' || room.flow === 'manual' ? 'Começar' : 'Abrir prova'}
           </Pill>
         )}
-        {room.phase === 'running' && <Pill onClick={() => room.extend(5)}>+5 min</Pill>}
+        {room.phase === 'running' && room.flow === 'free' && <Pill onClick={() => room.extend(5)}>+5 min</Pill>}
         {/* Também na sala ainda aberta: só existe uma prova por vez, e sem isto não haveria como desistir dela. */}
         {room.phase !== 'ended' && (
           <Pill tone="danger" onClick={() => setConfirmEnd(true)}>
@@ -266,6 +266,7 @@ function DashboardView({ room }: { room: Room }) {
         <main className="dash-main">{view === 'wall' ? <Wall room={room} alarms={alarms} /> : <ResultsTable room={room} />}</main>
         <aside className="dash-side">
           <ConnectionCard room={room} />
+          {room.flow === 'manual' && room.phase !== 'ended' && <ManualPanel room={room} />}
           <div className="card alert-card">
             <div className="row">
               <h2 className="grow">Alertas</h2>
@@ -300,9 +301,67 @@ function DashboardView({ room }: { room: Room }) {
 function RoomClock({ room }: { room: Room }) {
   useTick(500)
   if (room.phase === 'ended') return null
+  if (room.flow === 'manual') return <span className="small muted">Manual</span>
   if (room.config.timing === 'clock-in') return <span className="small muted">Cada um no seu tempo</span>
   const ms = room.phase === 'lobby' ? room.exam.durationMin * 60_000 : room.remaining()
   return <span className={`dash-clock${room.phase === 'running' && ms !== null && ms < 300_000 ? ' bad' : ''}`}>{ms === null ? '--:--' : formatClock(ms)}</span>
+}
+
+// ---- modo manual
+
+function ManualPanel({ room }: { room: Room }) {
+  useTick(1000)
+  const [minutes, setMinutes] = useState<Record<string, string>>({})
+  const running = room.phase === 'running'
+  return (
+    <div className="card manual-card">
+      <h2>Questões</h2>
+      <div className="manual-list">
+        {room.exam.questions.map((q, i) => {
+          const clock = room.clocks[q.id]
+          const live = !!clock && !clock.withdrawn
+          const ms = live && clock.endsAt !== null ? clock.endsAt - Date.now() : null
+          const open = room.questionOpen(q.id)
+          return (
+            <div key={q.id} className="manual-item" data-open={open}>
+              <div className="row">
+                <b className="num">{i + 1}</b>
+                <span className="grow manual-title" title={q.title}>{q.title}</span>
+                {open && ms !== null && <span className={`mono num small${ms < 60_000 ? ' bad' : ''}`}>{formatClock(ms)}</span>}
+                {open && ms === null && <span className="badge">Liberada</span>}
+                {live && !open && <span className="badge danger">Tempo esgotado</span>}
+                {clock?.withdrawn && <span className="badge">Retirada</span>}
+              </div>
+              <div className="row">
+                {open ? (
+                  <>
+                    <Pill size="sm" tone="danger" onClick={() => room.withdrawQuestion(q.id)}>Retirar</Pill>
+                    {ms !== null && <Pill size="sm" onClick={() => room.addQuestionTime(q.id, 1)}>+1 min</Pill>}
+                  </>
+                ) : (
+                  <>
+                    <input
+                      className="input num manual-minutes"
+                      type="number"
+                      min={1}
+                      aria-label={`Minutos da questão ${i + 1}`}
+                      placeholder="min"
+                      value={minutes[q.id] ?? ''}
+                      onChange={(e) => setMinutes((m) => ({ ...m, [q.id]: e.target.value }))}
+                    />
+                    <Pill size="sm" tone="primary" disabled={!running || room.releasing.has(q.id)} title={running ? undefined : 'Comece a prova primeiro'} onClick={() => room.releaseQuestion(q.id, Number(minutes[q.id]) || undefined)}>
+                      {room.releasing.has(q.id) ? 'Revelando' : 'Liberar'}
+                    </Pill>
+                    {live && <Pill size="sm" onClick={() => room.withdrawQuestion(q.id)}>Retirar</Pill>}
+                  </>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 
 // ---- conexão

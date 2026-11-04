@@ -1,4 +1,5 @@
 import type { Exam, Lang } from './exam'
+import type { Flow, QuestionClocks } from './flow'
 
 export const PROTOCOL_VERSION = 1
 export const HUB_ORIGINS = ['https://oblita.giuli.dev', 'http://localhost:5173', 'http://localhost:3000']
@@ -22,6 +23,7 @@ export interface RoomConfig {
   roomId: string
   title: string
   mode: RoomMode
+  flow: Flow
   timing: Timing
   compiler: boolean
   requireIsolation: boolean
@@ -135,8 +137,8 @@ export type StudentMsg =
 // Professor → aluno (sempre cifrado)
 export type TeacherMsg =
   | { t: 'refused'; reason: 'version' | 'ended' | 'identity' | 'full' }
-  | { t: 'welcome'; token?: string; config: StudentRoomConfig; phase: Phase; lastEvent: number; lastRec: number; team?: TeamInfo; drafts?: Record<string, { answer: Answer; rev: number }> }
-  | { t: 'exam'; exam: Exam; endsAt: number; now: number }
+  | { t: 'welcome'; token?: string; config: StudentRoomConfig; phase: Phase; lastEvent: number; lastEventHash?: string; lastRec: number; team?: TeamInfo; drafts?: Record<string, { answer: Answer; rev: number }> }
+  | { t: 'exam'; exam: Exam; endsAt: number | null; clocks: QuestionClocks; now: number }
   | { t: 'clock'; endsAt: number; now: number }
   | { t: 'phase'; phase: Phase }
   | { t: 'ack'; stream: 'event' | 'rec'; seq: number }
@@ -149,6 +151,7 @@ export type TeacherMsg =
   | { t: 'y-update' }
   | { t: 'y-aware' }
   | { t: 'beacon'; code: number }
+  | { t: 'countdown'; seconds: number }
   | { t: 'test-result'; result: TestReport }
   | { t: 'run-result'; result: RunReport }
   | { t: 'time'; c: number; s: number }
@@ -162,6 +165,7 @@ export interface TeamInfo {
   members: { clientId: string; name: string; focused: boolean }[]
 }
 
+export const REVEAL_COUNTDOWN_SECONDS = 3
 export const TEST_INTERVAL_MS = 60_000
 export const HOST_RUN_INTERVAL_MS = 5_000
 export const MAX_CODE_BYTES = 256 * 1024
@@ -207,6 +211,7 @@ export type TestReport =
 export interface StudentRoomConfig {
   title: string
   mode: RoomMode
+  flow: Flow
   timing: Timing
   durationMin: number
   compiler: boolean

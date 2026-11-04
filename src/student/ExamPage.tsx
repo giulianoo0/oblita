@@ -1,9 +1,12 @@
+import { motion } from 'motion/react'
 import { Check, Copy, Lock, LoaderCircle, Maximize, MonitorUp, Send, WifiOff, X } from 'lucide-react'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
+import { toast } from 'sonner'
 import type { ChoiceQuestion, Question, TextQuestion } from '../../shared/exam'
 import { formatClock, useObservable } from '../lib/store'
 import type { ConnectError } from '../net/link'
+import { DiaTextReveal } from '../ui/DiaTextReveal'
 import { Field, Logo, Markdown, Modal, Pill, Segmented, browserIssue, useTick } from '../ui/kit'
 // Importado direto, não sob demanda: o editor precisa já estar carregado antes de a internet ser cortada.
 import { Beacon } from './Beacon'
@@ -11,6 +14,8 @@ import { CodeWorkspace, useInternalClipboard } from './CodeWorkspace'
 import './exam.css'
 import { internalClipboard } from './proctor'
 import { defaultStarter, studentSession as session } from './session'
+
+const REVEAL_OVERLAY_MS = 2200
 
 const CONNECT_ERROR: Record<ConnectError, string> = {
   'bad-address': 'Esse endereço não é válido. Confira o IP que o professor mostrou.',
@@ -524,9 +529,12 @@ function WaitStep() {
   )
 }
 
-function Clock() {
+function Clock({ questionId }: { questionId?: string }) {
   useTick(500)
-  const ms = session.remaining()
+  const manual = session.config?.flow === 'manual'
+  const ms = manual ? (questionId ? session.questionRemaining(questionId) : null) : session.remaining()
+  // No manual, questão sem tempo definido não tem relógio nenhum para mostrar.
+  if (manual && ms === null) return null
   const low = ms !== null && ms < 5 * 60_000
   return <span className={low ? 'exam-clock low' : 'exam-clock'} role="timer">{ms === null ? '--:--' : formatClock(ms)}</span>
 }
@@ -560,7 +568,28 @@ function ExamRoom() {
   const [confirming, setConfirming] = useState(false)
   const [sending, setSending] = useState(false)
   const question = exam.questions.find((q) => q.id === questionId) ?? exam.questions[0]
+  const manual = s.config?.flow === 'manual'
   useInternalClipboard()
+  // A edição fecha sozinha quando o tempo da questão acaba, sem esperar mensagem nenhuma.
+  useTick(manual ? 1000 : 3_600_000)
+
+  // A revelação fica guardada por questão: o enunciado só varre uma vez, e ao chegar.
+  const [revealing, setRevealing] = useState<Question | null>(null)
+  const [revealedId, setRevealedId] = useState<string | null>(null)
+  const seen = useRef(new Set(exam.questions.map((q) => q.id)))
+  useEffect(() => {
+    if (!manual) return
+    const now = new Set(exam.questions.map((q) => q.id))
+    const fresh = exam.questions.find((q) => !seen.current.has(q.id))
+    if ([...seen.current].some((id) => !now.has(id))) toast('O professor retirou uma questão')
+    seen.current = now
+    if (!fresh) return
+    setQuestionId(fresh.id)
+    setRevealedId(fresh.id)
+    setRevealing(fresh)
+    const t = setTimeout(() => setRevealing(null), REVEAL_OVERLAY_MS)
+    return () => clearTimeout(t)
+  }, [exam, manual])
 
   const locked = !s.ready
   const hand = async () => {
@@ -583,12 +612,22 @@ function ExamRoom() {
           <i className={s.linkState === 'online' ? 'dot on' : 'dot off'} title={s.linkState === 'online' ? 'Conectado ao professor' : 'Sem conexão com o professor'} />
           {s.teacherFp && <span className="badge fp-chip" title="Código do professor" aria-label={`Código do professor: ${s.teacherFp}`}>{s.teacherFp}</span>}
           <SaveState />
-          <Clock />
-          <Pill tone="brand" onClick={() => setConfirming(true)}>
-            <Send size={16} /> Entregar
-          </Pill>
+          <Clock questionId={question?.id} />
+          {question && (
+            <Pill tone="brand" onClick={() => setConfirming(true)}>
+              <Send size={16} /> Entregar
+            </Pill>
+          )}
         </header>
-        <div className="exam-body">
+        {!question && (
+          <div className="center-screen">
+            <div className="gate">
+              <div className="breathing" aria-hidden="true" />
+              <h1 style={{ textAlign: 'center' }}>Aguardando o professor liberar uma questão</h1>
+            </div>
+          </div>
+        )}
+        {question && <div className="exam-body">
           <section className="exam-q">
             <div className="exam-tabs" role="tablist" aria-label="Questões">
               {exam.questions.map((q, i) => (
@@ -598,11 +637,12 @@ function ExamRoom() {
                 </button>
               ))}
             </div>
-            <Statement question={question} />
+            <Statement question={question} reveal={!revealing && revealedId === question.id} />
+            {!s.questionOpen(question.id) && <div className="badge danger" style={{ margin: '0 1.125rem 0.75rem', alignSelf: 'flex-start' }}>Tempo esgotado</div>}
             {s.config?.mode === 'group' && <GroupBar />}
           </section>
           {question.type === 'code' ? <CodeWorkspace question={question} /> : question.type === 'choice' ? <ChoiceAnswer question={question} /> : <TextAnswer question={question} />}
-        </div>
+        </div>}
       </div>
       <Modal open={confirming} title="Entregar a prova?" onClose={() => setConfirming(false)}>
         <div className="row" style={{ justifyContent: 'flex-end' }}>
@@ -613,6 +653,7 @@ function ExamRoom() {
           </Pill>
         </div>
       </Modal>
+      {manual && <RevealOverlay question={revealing} />}
       {locked && <LockOverlay />}
       {/* Fora de .exam: ela some enquanto a prova está bloqueada, e o selo precisa continuar na tela. */}
       <Beacon code={s.beaconCode} />
@@ -620,12 +661,35 @@ function ExamRoom() {
   )
 }
 
-function Statement({ question }: { question: Question }) {
+// Quem está de fora da contagem (chegou depois) não vê nada disto: a questão só aparece.
+function RevealOverlay({ question }: { question: Question | null }) {
+  useTick(100)
+  const left = Math.ceil((session.countdownEnds - performance.now()) / 1000)
+  if (left > 0) {
+    return (
+      <div className="reveal-overlay" role="timer" aria-live="polite">
+        <motion.div key={left} className="reveal-count" initial={{ opacity: 0, scale: 0.6, filter: 'blur(8px)' }} animate={{ opacity: 1, scale: 1, filter: 'blur(0px)' }} transition={{ type: 'spring', bounce: 0.25, duration: 0.6 }}>
+          {left}
+        </motion.div>
+      </div>
+    )
+  }
+  if (!question) return null
+  return (
+    <div className="reveal-overlay">
+      <h1 className="reveal-title">
+        <DiaTextReveal key={question.id} text={question.title} />
+      </h1>
+    </div>
+  )
+}
+
+function Statement({ question, reveal }: { question: Question; reveal?: boolean }) {
   return (
     <div className="exam-statement" role="tabpanel">
-      <h2>{question.title}</h2>
+      <h2>{reveal ? <DiaTextReveal key={question.id} text={question.title} /> : question.title}</h2>
       <div className="small muted">{question.points === 1 ? '1 ponto' : `${question.points} pontos`}</div>
-      <Markdown text={question.statement} />
+      <Markdown key={`${question.id}-${reveal ? 'r' : 'n'}`} text={question.statement} reveal={reveal} />
       {question.type === 'code' &&
         question.samples?.map((sample, i) => (
           <div key={i} className="sample">
@@ -659,7 +723,7 @@ function ChoiceAnswer({ question }: { question: ChoiceQuestion }) {
     s.setAnswer(question.id, { type: 'choice', selected: next })
   }
   return (
-    <div className="answer-area" role={question.multiple ? 'group' : 'radiogroup'} aria-label="Opções">
+    <div className="answer-area" role={question.multiple ? 'group' : 'radiogroup'} aria-label="Opções" inert={!s.questionOpen(question.id)}>
       {question.options.map((option) => (
         <button key={option.id} type="button" className="option" role={question.multiple ? 'checkbox' : 'radio'} aria-checked={selected.includes(option.id)} onClick={() => toggle(option.id)}>
           <i />
@@ -675,7 +739,7 @@ function TextAnswer({ question }: { question: TextQuestion }) {
   const answer = s.answerOf(question.id)
   return (
     <div className="answer-area">
-      <textarea className="input" aria-label="Sua resposta" spellCheck={false} value={answer?.type === 'text' ? answer.text : ''} onChange={(e) => s.setAnswer(question.id, { type: 'text', text: e.target.value })} />
+      <textarea className="input" aria-label="Sua resposta" spellCheck={false} readOnly={!s.questionOpen(question.id)} value={answer?.type === 'text' ? answer.text : ''} onChange={(e) => s.setAnswer(question.id, { type: 'text', text: e.target.value })} />
     </div>
   )
 }

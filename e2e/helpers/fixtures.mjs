@@ -55,7 +55,7 @@ export const solutions = {
       reference: { lang: 'c', code: `// ${MARK.reference}\n#include <stdio.h>\nint main(void) { int a, b; scanf("%d %d", &a, &b); printf("%d\\n", a + b); return 0; }\n` },
       tests: [
         { stdin: '40 2\n', stdout: '42\n', points: 1 },
-        { stdin: `${MARK.number} 20002 ${MARK.stdin}\n`, stdout: `${MARK.sum}\n`, points: 1 },
+        { stdin: `${MARK.number} 200027 ${MARK.stdin}\n`, stdout: `${MARK.sum}\n`, points: 1 },
         // Falha sempre: é o que prova que o aluno vê N de M, e não só "passou".
         { stdin: '1 1\n', stdout: `${MARK.stdout}\n`, points: 1 },
       ],

@@ -131,6 +131,7 @@ function Presence({ awareness }: { awareness: Awareness }) {
 export function CodeWorkspace({ question }: { question: CodeQuestion }) {
   const s = useObservable(studentSession)
   const answer = s.answerOf(question.id)
+  const open = s.questionOpen(question.id)
   const lang = answer?.type === 'code' ? answer.lang : question.languages[0]
   const files = answer?.type === 'code' ? answer.files : {}
   const names = Object.keys(files).filter((name) => FILE_NAME.test(name)).sort()
@@ -201,6 +202,10 @@ export function CodeWorkspace({ question }: { question: CodeQuestion }) {
       editor.dispose()
     }
   }, [s.doc, s.awareness])
+
+  useEffect(() => {
+    editorRef.current?.updateOptions({ readOnly: !open })
+  }, [open, s.doc])
 
   useEffect(() => {
     collabRef.current?.show(question.id, active)
@@ -292,7 +297,7 @@ export function CodeWorkspace({ question }: { question: CodeQuestion }) {
   return (
     <div className="workspace">
       <div className="ide">
-        <div className="files" role="listbox" aria-label="Arquivos">
+        <div className="files" role="listbox" aria-label="Arquivos" inert={!open}>
           <div className="files-head">
             <span>Arquivos</span>
             <button type="button" className="ghost" aria-label="Novo arquivo" title="Novo arquivo" disabled={names.length >= MAX_FILES} onClick={() => setRenaming({ from: null, value: '' })}>
@@ -400,7 +405,7 @@ function Console({ question, stdin, onStdin, view, onView, onRun, onTest }: Cons
               {s.running ? <LoaderCircle size={14} className="spin" /> : <Play size={14} />} Rodar
             </Pill>
           )}
-          {testsOn && <TestButton onTest={onTest} />}
+          {testsOn && <TestButton closed={!open} onTest={onTest} />}
         </div>
         <textarea className="console-in" spellCheck={false} aria-label="Entrada do programa" value={stdin} onChange={(e) => onStdin(e.target.value)} />
       </div>
@@ -440,12 +445,12 @@ function Console({ question, stdin, onStdin, view, onView, onRun, onTest }: Cons
   )
 }
 
-function TestButton({ onTest }: { onTest: () => void }) {
+function TestButton({ onTest, closed }: { onTest: () => void; closed: boolean }) {
   useTick(1000)
   const s = studentSession
   const wait = Math.ceil((s.nextTestAt - Date.now()) / 1000)
   return (
-    <Pill size="sm" disabled={s.testing || wait > 0} title="Um teste por minuto" onClick={onTest}>
+    <Pill size="sm" disabled={s.testing || wait > 0 || closed} title={closed ? 'Questão fechada' : 'Um teste por minuto'} onClick={onTest}>
       {s.testing ? <LoaderCircle size={14} className="spin" /> : <FlaskConical size={14} />}
       {wait > 0 ? <span className="num">{wait} s</span> : 'Testar'}
     </Pill>

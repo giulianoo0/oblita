@@ -1,4 +1,4 @@
-import { commands, Exit } from '@yowasp/clang'
+import { commands, Exit, runLLVM } from '@yowasp/clang'
 import { RUN_LIMITS } from '../../shared/protocol'
 
 // Este build do compilador não tem exceções de C++. Com estes símbolos, código com try/catch
@@ -76,12 +76,14 @@ self.onmessage = async ({ data }: MessageEvent<CompileRequest>) => {
   const decoder = new TextDecoder()
   const ms = () => performance.now() - start
   try {
+    // O clang ignora fetchProgress ao carregar por conta própria: sem esta busca explícita o
+    // progresso nunca chega à interface nem ao watchdog. Depois da primeira vez não faz nada.
+    await runLLVM(undefined, {}, { fetchProgress: ({ doneLength, totalLength }) => post({ id, progress: doneLength / totalLength }) })
     const out = (await commands[lang === 'c' ? 'clang' : 'clang++'](args, tree, {
       stdout: null,
       stderr: (bytes) => {
         if (bytes) log += decoder.decode(bytes, { stream: true })
       },
-      fetchProgress: ({ doneLength, totalLength }) => post({ id, progress: doneLength / totalLength }),
     })) as Record<string, Uint8Array<ArrayBuffer>>
     log += decoder.decode()
     const wasm = out['main.wasm']

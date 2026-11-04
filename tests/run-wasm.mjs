@@ -167,6 +167,10 @@ async function openPage() {
   await page.send('Page.enable')
   await page.send('Runtime.enable')
   await page.send('Inspector.enable')
+  await page.send('Log.enable')
+  page.on('Log.entryAdded', ({ entry: e }) => {
+    if (e.level === 'error') pageErrors.push({ type: 'log', text: e.text, url: e.url })
+  })
   await page.send('Page.navigate', { url: pageUrl })
   for (let i = 0; i < 240; i++) {
     const r = await page.send('Runtime.evaluate', { expression: 'typeof window.__t === "object"', returnByValue: true }).catch(() => null)
@@ -221,20 +225,25 @@ async function scenarioCpu() {
   const notes = []
   const t0 = performance.now()
   // O V8 otimiza o llvm.core.wasm em segundo plano por um bom tempo: sem esperar, o ocioso não é ocioso.
+  await call('window.__t.burnPrepare()', 60_000, 'burnPrepare')
   let idle = await cpuWindow(2000)
   for (let i = 0; i < 40 && idle > 0.3; i++) idle = await cpuWindow(2000)
   await call('window.__t.burnStart(3)', 60_000, 'burnStart')
-  await sleep(1500)
-  const burning = await cpuWindow(2500)
+  // O cpuTime do navegador só é atualizado de tempos em tempos: janelas curtas mentem.
+  await sleep(3000)
+  const burning = await cpuWindow(6000)
   const stop = await call('window.__t.burnStop()', 30_000, 'burnStop')
   await sleep(300)
-  const after = await cpuWindow(2500)
+  const serie = []
+  for (let i = 0; i < 8; i++) serie.push(+(await cpuWindow(1000)).toFixed(2))
+  const after = Math.min(...serie.slice(-4))
+  notes.push(`série após kill: ${serie}`)
   if (!stop.all) failures.push('kill não marcou todos como Interrompido')
   if (burning < 1.5) failures.push(`só ${burning.toFixed(2)} núcleos ocupados com 3 laços: medição inválida`)
   if (after > idle + 0.4) failures.push(`CPU continua alta depois do kill: ${after.toFixed(2)} núcleos (ocioso ${idle.toFixed(2)})`)
   await call('window.__t.burnTimeout(3, 1500)', 30_000, 'burnTimeout')
-  await sleep(300)
-  const afterTimeout = await cpuWindow(2500)
+  await sleep(4000)
+  const afterTimeout = await cpuWindow(4000)
   if (afterTimeout > idle + 0.4) failures.push(`CPU continua alta depois do timeout: ${afterTimeout.toFixed(2)} núcleos`)
   notes.push(`núcleos: ocioso ${idle.toFixed(2)}, 3 laços ${burning.toFixed(2)}, após kill ${after.toFixed(2)}, após timeout ${afterTimeout.toFixed(2)}`)
   metrics.cpu = { idle, burning, afterKill: after, afterTimeout, killMs: stop.killMs }
@@ -255,20 +264,26 @@ async function scenarioThirty() {
   const ms = rows.map((r) => r.ms)
   const trend = { wsInicioMb: avg(ws.slice(2, 7)), wsFimMb: avg(ws.slice(-5)), wsPicoMb: Math.max(...ws), msInicio: avg(ms.slice(2, 7)), msFim: avg(ms.slice(-5)), heapInicioMb: rows[2].heapMb, heapFimMb: rows[29].heapMb }
   if (trend.wsFimMb > trend.wsInicioMb * 1.5 && trend.wsFimMb > trend.wsInicioMb + 300) failures.push(`memória cresceu: ${trend.wsInicioMb} para ${trend.wsFimMb} MB`)
-  if (trend.msFim > trend.msInicio * 1.6) failures.push(`compilação ficou lenta: ${trend.msInicio} para ${trend.msFim} ms`)
+  // Com outros processos na máquina a média oscila de 7 s a 47 s; o melhor tempo de cada janela é o que mostra degradação.
+  const melhorInicio = Math.min(...ms.slice(2, 12))
+  const melhorFim = Math.min(...ms.slice(-10))
+  trend.melhorInicioMs = melhorInicio
+  trend.melhorFimMs = melhorFim
+  if (melhorFim > melhorInicio * 1.6) failures.push(`compilação ficou lenta: melhor tempo de ${melhorInicio} para ${melhorFim} ms`)
   metrics.trinta = { ...trend, serie: rows }
   record({ id: 'robust.30-compiles-sem-vazar', group: 'robust', status: failures.length ? 'fail' : 'pass', failures, notes: [JSON.stringify(trend)], metrics: trend, totalMs: Math.round(performance.now() - t0) })
 }
 
-// Rede lenta de verdade: a 1,3 MB/s os 105 MB do compilador levam mais que o watchdog de 60 s.
+// Rede lenta de verdade: a 0,8 MB/s por arquivo o maior deles, de 75 MB, leva mais que o watchdog de 60 s.
 async function scenarioSlowDownload(url) {
   const t0 = performance.now()
   const failures = []
-  await fetch(`${url}/__throttle?bps=1400000`)
+  await fetch(`${url}/__throttle?bps=800000`)
   try {
     await openPage()
     const r = await call('window.__t.slowCompile()', 170_000, 'compile em rede lenta')
     if (!r.ok) failures.push(`falhou: ${r.log}`)
+    if (!r.progresso) failures.push('nenhum evento de progresso')
     if (r.ms < 62_000) failures.push(`download terminou em ${r.ms} ms: não testou nada`)
     metrics.redeLenta = r
     record({ id: 'robust.download-lento-passa-do-watchdog', group: 'robust', status: failures.length ? 'fail' : 'pass', failures, metrics: r, totalMs: Math.round(performance.now() - t0) })

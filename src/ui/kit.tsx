@@ -2,7 +2,9 @@ import { AnimatePresence, motion } from 'motion/react'
 import { X } from 'lucide-react'
 import { useEffect, useState, type ButtonHTMLAttributes, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
+import { IMAGE_MARKDOWN } from '../../shared/exam'
 import { formatClock } from '../lib/store'
+import './dia.css'
 
 const pop = { type: 'spring', bounce: 0.25, duration: 0.6 } as const
 const settle = { type: 'spring', bounce: 0, duration: 0.36 } as const
@@ -114,11 +116,15 @@ export const browserIssue = (): string | null => {
   return ok ? null : 'Use Chrome ou Edge atualizado neste computador.'
 }
 
+const REVEAL_STAGGER_MS = 140
+
 // Markdown só com o necessário. Vira nós do React, então nunca há HTML injetado do enunciado.
-export function Markdown({ text }: { text: string }) {
+export function Markdown({ text, reveal }: { text: string; reveal?: boolean }) {
+  const [zoom, setZoom] = useState<{ src: string; alt: string } | null>(null)
   const blocks = text.split(/```/)
+  let paragraph = 0
   return (
-    <div className="md">
+    <div className={reveal ? 'md revealing' : 'md'}>
       {blocks.map((block, i) =>
         i % 2 ? (
           <pre key={i}>{block.replace(/^\w*\n/, '')}</pre>
@@ -126,15 +132,39 @@ export function Markdown({ text }: { text: string }) {
           block
             .split(/\n{2,}/)
             .filter((p) => p.trim())
-            .map((p, j) => <p key={`${i}-${j}`}>{inline(p)}</p>)
+            .map((p, j) => {
+              const delay = paragraph++ * REVEAL_STAGGER_MS
+              // Parágrafo só de imagem não leva gradiente: não há texto para varrer.
+              const sweep = reveal && !IMAGE_ONLY.test(p.trim())
+              return (
+                <p key={`${i}-${j}`} className={sweep ? 'dia-reveal' : undefined} style={sweep && delay ? { animationDelay: `${delay}ms` } : undefined}>
+                  {inline(p, setZoom)}
+                </p>
+              )
+            })
         ),
       )}
+      <Modal open={!!zoom} title={zoom?.alt || 'Imagem'} onClose={() => setZoom(null)}>
+        {zoom && (
+          <div className="md-zoom">
+            <img src={zoom.src} alt={zoom.alt} />
+          </div>
+        )}
+      </Modal>
     </div>
   )
 }
 
-function inline(text: string) {
-  return text.split(/(`[^`]+`|\*\*[^*]+\*\*)/).map((part, i) => {
+const IMAGE_ONLY = new RegExp(`^${IMAGE_MARKDOWN.source}$`)
+const INLINE = /(!\[[^\]]*\]\(data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+\)|`[^`]+`|\*\*[^*]+\*\*)/
+
+function inline(text: string, onZoom: (image: { src: string; alt: string }) => void) {
+  return text.split(INLINE).map((part, i) => {
+    const image = part.match(IMAGE_MARKDOWN)
+    if (image && image[0] === part) {
+      const [, alt, src] = image
+      return <img key={i} src={src} alt={alt} onClick={() => onZoom({ src, alt })} />
+    }
     if (part.startsWith('`') && part.endsWith('`') && part.length > 1) return <code key={i}>{part.slice(1, -1)}</code>
     if (part.startsWith('**') && part.endsWith('**') && part.length > 3) return <strong key={i}>{part.slice(2, -2)}</strong>
     return part
