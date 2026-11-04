@@ -9,8 +9,8 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const MAC = process.platform === 'darwin'
-// Edge no Windows, Chrome no Mac; BROWSER troca o executável.
-const EDGE = process.env.BROWSER ?? (MAC ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe')
+// Edge no Windows, Chrome fora dele; BROWSER troca o executável.
+const EDGE = process.env.BROWSER ?? (process.platform === 'win32' ? 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe' : MAC ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : 'google-chrome')
 const SHOTS = process.argv.find((a) => a.startsWith('--shots='))?.split('=')[1]
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
