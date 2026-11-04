@@ -307,3 +307,7 @@ textarea.input { height: auto; min-height: 5.5rem; padding: 0.625rem 0.875rem; r
 .team-code-input { font-size: var(--text-lg); letter-spacing: 0.2em; text-transform: uppercase; }
 
 .modal a { color: var(--primary); text-underline-offset: 2px; }
+
+.home-foot { display: flex; align-items: center; justify-content: center; gap: 1.25rem; padding: 1.25rem 1.5rem 1.5rem; font-size: var(--text-sm); color: var(--text-faint); }
+.home-foot a { display: inline-flex; align-items: center; gap: 0.375rem; color: var(--text-muted); text-decoration: none; transition: color var(--dur-fast); }
+.home-foot a:hover { color: var(--text); }
