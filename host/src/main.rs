@@ -1,16 +1,26 @@
 // Hub de rede local do Oblita: repassa bytes entre os alunos e o painel do professor.
 // Não entende provas nem gabarito. O protocolo é o de server/hub.ts e shared/frames.ts.
+#[macro_use]
+mod log;
+mod app;
+mod config;
+mod files;
+mod files_ws;
+mod tui;
+
 use std::{
     collections::{BTreeMap, HashMap},
-    io::{self, Write},
+    io::{self, IsTerminal},
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    path::PathBuf,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        mpsc::{sync_channel, SyncSender},
-        Arc, Mutex, MutexGuard, OnceLock,
+        Arc, Mutex, MutexGuard,
     },
     time::{Duration, Instant},
 };
+
+use app::App;
 
 use axum::{
     body::Bytes,
@@ -43,6 +53,8 @@ const SILENT_LIMIT: Duration = Duration::from_secs(15);
 const MAX_STUDENT_FRAME: usize = 8 * 1024 * 1024;
 // 16 MiB de dados mais os 5 bytes do cabeçalho do hub.
 const MAX_HOST_FRAME: usize = 16 * 1024 * 1024 + 5;
+// Um pedido de arquivo: a prova em JSON é o maior texto, e pode passar de 12 MB.
+const MAX_FILE_FRAME: usize = 32 * 1024 * 1024;
 // Cobrado por quadro: uma enxurrada de quadros de 1 byte também gasta memória.
 const FRAME_COST: usize = 256;
 const STUDENT_QUEUE_BYTES: usize = 64 * 1024 * 1024;
@@ -59,29 +71,6 @@ const CLOSE_WAIT: Duration = Duration::from_secs(2);
 const OP_OPEN: u8 = 0;
 const OP_CLOSE: u8 = 1;
 const OP_DATA: u8 = 2;
-
-static LOG: OnceLock<SyncSender<String>> = OnceLock::new();
-
-macro_rules! log {
-    ($($arg:tt)*) => {
-        if let Some(log) = LOG.get() {
-            let _ = log.try_send(format!($($arg)*));
-        }
-    };
-}
-
-// Thread própria: clicar na janela do cmd (QuickEdit) trava a saída, e o hub não pode travar junto.
-fn init_log() {
-    let (tx, rx) = sync_channel::<String>(4096);
-    std::thread::spawn(move || {
-        let mut out = io::stdout();
-        for line in rx {
-            let _ = writeln!(out, "{line}");
-            let _ = out.flush();
-        }
-    });
-    let _ = LOG.set(tx);
-}
 
 fn hub_frame(conn: u32, op: u8, data: &[u8]) -> Bytes {
     let mut out = Vec::with_capacity(5 + data.len());
@@ -182,6 +171,7 @@ struct Inner {
 struct Hub {
     token: String,
     inner: Mutex<Inner>,
+    app: Arc<App>,
 }
 
 impl Hub {
@@ -295,6 +285,7 @@ async fn student_session(hub: Arc<Hub>, mut ws: WebSocket, ip: IpAddr) {
             if let Some((_, host)) = &inner.host {
                 host.push(Some(hub_frame(conn, OP_OPEN, &[])), None);
             }
+            hub.app.students.store(inner.students.len(), Ordering::Relaxed);
             Ok((conn, inner.students.len()))
         }
     };
@@ -323,6 +314,7 @@ async fn student_session(hub: Arc<Hub>, mut ws: WebSocket, ip: IpAddr) {
         if let Some((_, host)) = &inner.host {
             host.push(Some(hub_frame(conn, OP_CLOSE, &[])), None);
         }
+        hub.app.students.store(inner.students.len(), Ordering::Relaxed);
         inner.students.len()
     };
     if overflow {
@@ -347,6 +339,7 @@ async fn host_session(hub: Arc<Hub>, ws: WebSocket) {
         }
         (id, inner.students.len(), replaced.is_some())
     };
+    hub.app.panel.store(true, Ordering::Relaxed);
     if replaced {
         log!("Um novo painel assumiu no lugar do anterior.");
     }
@@ -360,6 +353,7 @@ async fn host_session(hub: Arc<Hub>, ws: WebSocket) {
         let current = matches!(&inner.host, Some((h, _)) if *h == id);
         if current {
             inner.host = None;
+            hub.app.panel.store(false, Ordering::Relaxed);
         }
         current
     };
@@ -372,7 +366,7 @@ fn is_loopback(ip: IpAddr) -> bool {
     ip.to_canonical().is_loopback()
 }
 
-fn lan_addresses() -> Vec<(String, Ipv4Addr)> {
+pub fn lan_addresses() -> Vec<(String, Ipv4Addr)> {
     let Ok(interfaces) = if_addrs::get_if_addrs() else { return Vec::new() };
     interfaces
         .into_iter()
@@ -432,6 +426,66 @@ async fn ws_host(
         return StatusCode::FORBIDDEN.into_response();
     }
     ws.max_message_size(MAX_HOST_FRAME).max_frame_size(MAX_HOST_FRAME).on_upgrade(move |socket| host_session(hub, socket))
+}
+
+// Mesma porta de entrada do painel, mais a origem: só a página do Oblita nesta máquina grava em disco.
+async fn ws_files(
+    ws: WebSocketUpgrade,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Query(query): Query<HashMap<String, String>>,
+    State(hub): State<Arc<Hub>>,
+    headers: HeaderMap,
+) -> Response {
+    let token_ok = query.get("token").is_some_and(|token| *token == hub.token);
+    let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()).unwrap_or("");
+    if !token_ok || !is_loopback(peer.ip()) || !HUB_ORIGINS.contains(&origin) {
+        log!("Pedido de gravação recusado ({}). Só o painel neste computador grava na pasta.", peer.ip());
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    ws.max_message_size(MAX_FILE_FRAME).max_frame_size(MAX_FILE_FRAME).on_upgrade(move |socket| files_session(hub, socket))
+}
+
+async fn send_within(ws: &mut WebSocket, frame: Bytes) -> bool {
+    matches!(timeout(SEND_TIMEOUT, ws.send(Message::Binary(frame))).await, Ok(Ok(())))
+}
+
+async fn files_session(hub: Arc<Hub>, mut ws: WebSocket) {
+    let app = hub.app.clone();
+    app.files_open.fetch_add(1, Ordering::Relaxed);
+    let mut folder = app.folder.subscribe();
+    let info = |root: PathBuf| files_ws::encode_response(0, 0, &files_ws::info_json(&root));
+    let mut alive = send_within(&mut ws, info(app.folder())).await;
+    while alive {
+        tokio::select! {
+            changed = folder.changed() => {
+                if changed.is_err() {
+                    break;
+                }
+                let root = folder.borrow_and_update().clone();
+                alive = send_within(&mut ws, info(root)).await;
+            }
+            incoming = ws.recv() => match incoming {
+                Some(Ok(Message::Binary(bytes))) => {
+                    let Some(req) = files_ws::parse_request(&bytes) else { continue };
+                    let id = req.id;
+                    let worker = app.clone();
+                    // Um pânico aqui vira erro deste pedido, e o canal continua.
+                    let outcome = tokio::task::spawn_blocking(move || worker.file_op(&req))
+                        .await
+                        .unwrap_or_else(|_| files_ws::Outcome::Failed(files::FileError::Io("erro interno".into())));
+                    let reply = match outcome {
+                        files_ws::Outcome::Ok(body) => files_ws::encode_response(id, 0, &body),
+                        files_ws::Outcome::Saved(path) => files_ws::encode_response(id, 0, json!({ "path": path }).to_string().as_bytes()),
+                        files_ws::Outcome::Failed(error) => files_ws::encode_response(id, error.code(), error.describe().as_bytes()),
+                    };
+                    alive = send_within(&mut ws, reply).await;
+                }
+                Some(Ok(_)) => {}
+                Some(Err(_)) | None => break,
+            },
+        }
+    }
+    app.files_open.fetch_sub(1, Ordering::Relaxed);
 }
 
 async fn ws_student(ws: WebSocketUpgrade, ConnectInfo(peer): ConnectInfo<SocketAddr>, State(hub): State<Arc<Hub>>) -> Response {
@@ -510,7 +564,7 @@ fn explain_bind(error: io::Error) -> String {
     }
 }
 
-async fn serve(token: String) -> Result<(), String> {
+async fn serve(token: String, app: Arc<App>) -> Result<(), String> {
     let address = SocketAddr::from((Ipv4Addr::UNSPECIFIED, HUB_PORT));
     let listener = TcpListener::bind(address).await.map_err(explain_bind)?.tap_io(|tcp| {
         let _ = tcp.set_nodelay(true);
@@ -529,16 +583,18 @@ async fn serve(token: String) -> Result<(), String> {
         }
     }
     log!("");
+    log!("Gravação em: {}", app.folder().display());
     log!("Deixe esta janela aberta durante a prova. Para encerrar, feche a janela.");
     log!("");
     tokio::task::spawn_blocking(ensure_firewall);
 
-    let hub = Arc::new(Hub { token, inner: Mutex::new(Inner::default()) });
+    let hub = Arc::new(Hub { token, inner: Mutex::new(Inner::default()), app });
     let app: Router = Router::new()
         .route("/ping", get(ping))
         .route("/host-token", get(host_token))
         .route("/ws/host", get(ws_host))
         .route("/ws/student", get(ws_student))
+        .route("/ws/files", get(ws_files))
         .fallback(|| async { StatusCode::NOT_FOUND })
         .layer(middleware::from_fn(cors))
         .with_state(hub);
@@ -546,7 +602,7 @@ async fn serve(token: String) -> Result<(), String> {
     axum::serve(listener, service).await.map_err(|error| format!("O servidor parou: {error}. Abra o programa de novo."))
 }
 
-fn run() -> Result<(), String> {
+fn run(app: Arc<App>) -> Result<(), String> {
     let mut random = [0u8; 16];
     getrandom::fill(&mut random).map_err(|error| format!("O Windows não forneceu números aleatórios: {error}. Reinicie o computador."))?;
     let token: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
@@ -554,20 +610,61 @@ fn run() -> Result<(), String> {
         .enable_all()
         .build()
         .map_err(|error| format!("Não foi possível iniciar: {error}. Reinicie o computador e tente de novo."))?;
-    runtime.block_on(serve(token))
+    runtime.block_on(serve(token, app))
+}
+
+fn arg_value(args: &[String], name: &str) -> Option<String> {
+    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
 }
 
 // Acentos: a std do Rust escreve no console com WriteConsoleW, então não precisa de chcp 65001.
+// O hub roda numa thread própria; a principal fica com a tela, porque o diálogo de pasta do macOS
+// só abre na thread principal.
 fn main() {
-    init_log();
+    let args: Vec<String> = std::env::args().collect();
+    // Sem terminal (saída redirecionada, como no CI), a tela de menu não teria onde desenhar.
+    let plain = args.iter().any(|a| a == "--plain") || !io::stdout().is_terminal() || !io::stdin().is_terminal();
+    log::init(plain);
     std::panic::set_hook(Box::new(|info| {
         log!("Erro interno: {info}. Se algo parar de funcionar, feche e abra o programa de novo.");
     }));
-    let message = match std::panic::catch_unwind(run) {
-        Ok(Ok(())) => "O programa parou. Abra de novo para continuar.".to_string(),
-        Ok(Err(message)) => message,
-        Err(_) => "O programa parou por um erro interno. Abra de novo para continuar.".to_string(),
-    };
+
+    // Para testar: a pasta vale só desta vez e não é salva.
+    let chosen = arg_value(&args, "--pasta").map(PathBuf::from);
+    let config_file = config::config_path();
+    let folder = chosen.clone().unwrap_or_else(|| match &config_file {
+        Some(file) => config::load(file, config::default_folder()).folder,
+        None => config::default_folder(),
+    });
+    if let Err(error) = std::fs::create_dir_all(&folder) {
+        log!("Não foi possível criar a pasta de gravação {}: {error}. Escolha outra no menu.", folder.display());
+    }
+    let app = Arc::new(App::new(folder, config_file, chosen.is_none()));
+
+    let (stopped_tx, stopped_rx) = std::sync::mpsc::channel::<String>();
+    let server = app.clone();
+    std::thread::spawn(move || {
+        let message = match std::panic::catch_unwind(move || run(server)) {
+            Ok(Ok(())) => "O programa parou. Abra de novo para continuar.".to_string(),
+            Ok(Err(message)) => message,
+            Err(_) => "O programa parou por um erro interno. Abra de novo para continuar.".to_string(),
+        };
+        let _ = stopped_tx.send(message);
+    });
+
+    let mut stopped = None;
+    if !plain {
+        match std::panic::catch_unwind(|| tui::run(&app, &stopped_rx)) {
+            Ok(Ok(tui::Exit::Quit)) => std::process::exit(0),
+            Ok(Ok(tui::Exit::Stopped(message))) => stopped = Some(message),
+            Ok(Err(error)) => log!("A tela de menu não abriu ({error}); seguindo no modo simples."),
+            Err(_) => log!("A tela de menu parou por um erro interno; seguindo no modo simples. A prova continua."),
+        }
+        // Dá tempo de a última linha chegar à lista antes de ela ir para o console.
+        std::thread::sleep(Duration::from_millis(100));
+        log::switch_to_stdout();
+    }
+    let message = stopped.unwrap_or_else(|| stopped_rx.recv().unwrap_or_else(|_| "O programa parou.".to_string()));
     log!("{message}");
     log!("");
     log!("Aperte Enter para fechar esta janela.");
