@@ -45,7 +45,7 @@ export const DEFLATE_TAG = 4
 // Abaixo disto o cabeçalho do deflate e o custo de criar o fluxo não compensam.
 export const COMPRESS_MIN = 512
 
-async function pipe(bytes: Uint8Array<ArrayBuffer>, stream: TransformStream<Uint8Array, Uint8Array>, max: number) {
+async function pipe(bytes: Uint8Array<ArrayBuffer>, stream: CompressionStream | DecompressionStream, max: number) {
   const reader = new Blob([bytes]).stream().pipeThrough(stream).getReader()
   const parts: Uint8Array[] = []
   let total = 0
