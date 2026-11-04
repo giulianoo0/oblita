@@ -14,7 +14,6 @@ void import('monaco-editor/esm/vs/basic-languages/cpp/cpp.js')
 export { monaco }
 
 const MARKER_OWNER = 'compilador'
-const baseName = (path: string) => path.slice(path.lastIndexOf('/') + 1)
 
 export const EDITOR_FONT = "'Geist Mono Variable', monospace"
 
@@ -28,8 +27,8 @@ export const fileUri = (questionId: string, file: string) =>
   monaco.Uri.from({ scheme: 'file', path: `/${encodeURIComponent(questionId)}/${file}` })
 
 export function describeModel(model: monaco.editor.ITextModel) {
-  const [, questionId, file] = model.uri.path.split('/')
-  return { questionId: decodeURIComponent(questionId), file }
+  const [, questionId, ...file] = model.uri.path.split('/')
+  return { questionId: decodeURIComponent(questionId), file: file.join('/') }
 }
 
 export function languageFor(file: string, lang: Lang) {
@@ -69,7 +68,7 @@ export function showDiagnostics(questionId: string, log: string) {
   for (const model of questionModels(questionId)) {
     const file = describeModel(model).file
     const markers = found
-      .filter((d) => baseName(d.file) === file)
+      .filter((d) => d.file === file)
       .map((d) => {
         const lineNumber = Math.min(d.line, model.getLineCount())
         const word = model.getWordAtPosition({ lineNumber, column: d.column })
