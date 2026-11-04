@@ -155,19 +155,26 @@ textarea.input { height: auto; min-height: 5.5rem; padding: 0.625rem 0.875rem; r
 .role-card.brand { background: var(--brand); color: var(--on-brand); }
 .role-card.brand:hover { background: var(--brand-hover); }
 .role-card b { font-weight: 600; font-size: var(--text-xl); letter-spacing: -0.015em; }
-.role-card:not(.join-panel):active { transform: scale(0.98); }
-.role-card:not(.join-panel):not(.brand):hover { background: var(--surface-2); }
+.role-card:active { transform: scale(0.98); }
+.role-card:not(.brand):hover { background: var(--surface-2); }
 .role-card-body { display: flex; flex-direction: column; align-items: center; gap: 0.75rem; }
-.role-slot { display: grid; }
-.home-intro { display: flex; flex-direction: column; align-items: center; gap: 2rem; }
 
-/* O card do aluno vira o painel de entrada; o resto da tela sai com blur. */
-.role-grid[data-joining] { grid-template-columns: minmax(0, 30rem); }
-.join-panel { position: relative; min-height: 0; padding: 1.75rem 1.75rem 1.5rem; align-items: stretch; justify-content: flex-start; cursor: default; text-align: left; font-size: var(--text-base); }
-.join-panel-body { width: 100%; }
-.join-close { position: absolute; top: 1rem; right: 1rem; display: grid; place-items: center; width: 2rem; height: 2rem; border: 0; border-radius: var(--radius-full); background: transparent; color: var(--text-muted); cursor: pointer; transition: background-color var(--dur-fast), color var(--dur-fast); }
+/* Entrar pela página inicial: por cima de tudo. No computador o card vira o modal; no celular, gaveta. */
+.role-ghost { visibility: hidden; }
+/* Preso no alto: quando o passo muda de altura, o modal cresce para baixo em vez de subir e descer. */
+.join-overlay { position: fixed; inset: 0; z-index: 200; display: grid; place-items: start center; padding: min(22vh, 11rem) 1rem 1rem; }
+.join-backdrop { position: absolute; inset: 0; background: rgb(0 0 0 / 55%); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+.join-dialog { position: relative; width: min(30rem, 100%); background: var(--tile); box-shadow: 0 24px 64px rgb(0 0 0 / 40%); overflow: hidden; }
+.join-dialog-body { padding: 1.75rem 1.75rem 1.5rem; }
+.join-sheet { position: absolute; left: 0; right: 0; bottom: 0; max-height: 92dvh; overflow-y: auto; padding: 0 1.25rem calc(1.25rem + env(safe-area-inset-bottom)); border-radius: 1.5rem 1.5rem 0 0; background: var(--tile); box-shadow: 0 -12px 40px rgb(0 0 0 / 35%); }
+.sheet-handle { display: grid; place-items: center; height: 1.75rem; margin: 0 -1.25rem 0.25rem; cursor: grab; touch-action: none; }
+.sheet-handle i { width: 2.5rem; height: 0.3rem; border-radius: var(--radius-full); background: var(--surface-3); }
+.join-close { position: absolute; top: 1rem; right: 1rem; z-index: 1; display: grid; place-items: center; width: 2rem; height: 2rem; border: 0; border-radius: var(--radius-full); background: transparent; color: var(--text-muted); cursor: pointer; transition: background-color var(--dur-fast), color var(--dur-fast); }
+.join-sheet .join-close { top: 1.5rem; right: 1rem; }
 .join-close:hover { background: var(--soft); color: var(--text); }
 .join-wait { display: block; margin: 2rem auto; color: var(--text-muted); }
+/* A caixa anima até a altura do passo; a folga de 3px não corta o anel de foco dos campos. */
+.join-viewport { overflow: hidden; margin: -3px; padding: 3px; }
 
 /* Entrar na prova em dois passos, na página inicial e em /entrar. */
 .join { display: flex; flex-direction: column; gap: 1.25rem; }
@@ -185,7 +192,7 @@ textarea.input { height: auto; min-height: 5.5rem; padding: 0.625rem 0.875rem; r
 .join-place:hover:not(:disabled) { background: var(--surface-3); }
 .join .pill.lg { width: 100%; height: 3.25rem; }
 .join-inline .pill.lg { width: 3.25rem; }
-@media (max-width: 34rem) { .join-row { grid-template-columns: 1fr; } .join-panel { padding: 1.5rem 1.25rem 1.25rem; } }
+@media (max-width: 34rem) { .join-row { grid-template-columns: 1fr; } }
 @media (max-width: 34rem) { .role-grid { grid-template-columns: 1fr; } .role-card { min-height: 8rem; } }
 .home-mock { width: min(46rem, 100%); padding: 0.875rem; border-radius: 2rem; background: var(--surface); box-shadow: 0 0 0 1px var(--line), var(--shadow-float); display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem; }
 .home-mock div { aspect-ratio: 16 / 10; border-radius: var(--radius-2xl); background: var(--surface-2); position: relative; animation: pop-in var(--dur-pop) var(--ease-spring-pop) backwards; overflow: hidden; }

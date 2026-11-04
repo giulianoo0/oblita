@@ -4,7 +4,7 @@ import './styles/tokens.css'
 import './styles/app.css'
 import { Component, StrictMode, lazy, Suspense, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
+import { AnimatePresence, MotionConfig, motion, useReducedMotion } from 'motion/react'
 import { BrowserRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { Toaster } from 'sonner'
 import { startOffline } from './lib/offline'
@@ -86,7 +86,10 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BrowserRouter>
       <ErrorBoundary>
-      <Shell />
+        {/* Com "reduzir movimento" no sistema, as animações de transform e layout do motion viram corte. */}
+        <MotionConfig reducedMotion="user">
+          <Shell />
+        </MotionConfig>
       </ErrorBoundary>
     </BrowserRouter>
     <Toaster position="bottom-left" duration={2600} visibleToasts={4} />

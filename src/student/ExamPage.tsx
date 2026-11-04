@@ -1,5 +1,5 @@
 import { ArrowRight, Check, Copy, HardDrive, Lock, LoaderCircle, Maximize, MonitorOff, MonitorUp, RefreshCw, Send, WifiOff, X } from 'lucide-react'
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -173,6 +173,7 @@ export function JoinForm({ onJoined }: { onJoined?: () => void }) {
   const [badPlace, setBadPlace] = useState(false)
   // Quem já tem o lugar (voltou recusado, ou veio com o IP na URL) começa no segundo passo.
   const [step, setStep] = useState<0 | 1>(saved || ipParam ? 1 : 0)
+  const [measure, height] = useHeight()
 
   // A sala é quem diz se tem senha. O campo fica depois de aparecer, senão some enquanto tenta de novo.
   if (!asked && (s.needsPassword || s.refused === 'password')) setAsked(true)
@@ -226,6 +227,8 @@ export function JoinForm({ onJoined }: { onJoined?: () => void }) {
         <i className="done" />
         <i className={step === 1 ? 'done' : ''} />
       </div>
+      <motion.div className="join-viewport" initial={false} animate={{ height }} transition={HEIGHT}>
+      <div ref={measure}>
       <AnimatePresence mode="wait" initial={false}>
         {step === 0 ? (
           <motion.div key="place" className="join-step" {...STEP_MOTION}>
@@ -276,15 +279,32 @@ export function JoinForm({ onJoined }: { onJoined?: () => void }) {
           </motion.div>
         )}
       </AnimatePresence>
+      </div>
+      </motion.div>
     </form>
   )
 }
 
+// A troca de passo é um fade no lugar, e a caixa acompanha a altura do passo novo.
 const STEP_MOTION = {
-  initial: { opacity: 0, x: 16, filter: 'blur(4px)' },
-  animate: { opacity: 1, x: 0, filter: 'blur(0px)', transition: { duration: 0.28, ease: [0.16, 1, 0.3, 1] } },
-  exit: { opacity: 0, x: -12, filter: 'blur(4px)', transition: { duration: 0.14 } },
+  initial: { opacity: 0, y: 6 },
+  animate: { opacity: 1, y: 0, transition: { duration: 0.24, ease: [0.16, 1, 0.3, 1] } },
+  exit: { opacity: 0, transition: { duration: 0.1 } },
 } as const
+const HEIGHT = { type: 'spring', bounce: 0, duration: 0.38 } as const
+
+// Altura do conteúdo, para animar a caixa até ela. 'auto' até a primeira medida, então nada pula ao abrir.
+function useHeight() {
+  const [height, setHeight] = useState<number | 'auto'>('auto')
+  const ro = useRef<ResizeObserver | null>(null)
+  const measure = useCallback((el: HTMLDivElement | null) => {
+    ro.current?.disconnect()
+    if (!el) return
+    ro.current = new ResizeObserver(([entry]) => setHeight(entry.borderBoxSize?.[0]?.blockSize ?? el.offsetHeight))
+    ro.current.observe(el)
+  }, [])
+  return [measure, height] as const
+}
 
 function ConnectStep() {
   return (
