@@ -142,7 +142,12 @@ textarea.input { height: auto; min-height: 5.5rem; padding: 0.625rem 0.875rem; r
 .home-cta:hover { background: var(--brand-hover); }
 .home-cta:active { transform: scale(0.97); }
 .home-title { animation: pop-in var(--dur-pop) var(--ease-spring-pop); }
-.status-chip { position: relative; display: inline-flex; align-items: center; gap: 0.375rem; height: 2rem; padding: 0 0.75rem; border-radius: var(--radius-full); background: var(--soft); font-size: var(--text-sm); font-weight: 500; color: var(--text-muted); overflow: hidden; }
+/* A quebra é sempre depois de "de"; só numa tela estreita demais cada linha quebra sozinha. */
+.home-line { display: block; }
+.home-title:not([data-ready]) { opacity: 0; animation: none; }
+/* No celular não cabe tudo: a versão sai do cabeçalho, mas o aviso de atualização (o botão) fica. */
+@media (max-width: 30rem) { .site-top span.build-version { display: none; } }
+.status-chip { position: relative; display: inline-flex; white-space: nowrap; align-items: center; gap: 0.375rem; height: 2rem; padding: 0 0.75rem; border-radius: var(--radius-full); background: var(--soft); font-size: var(--text-sm); font-weight: 500; color: var(--text-muted); overflow: hidden; }
 .status-chip.ok { color: var(--status-success); }
 .status-chip.bad { background: var(--status-danger-soft); color: var(--status-danger-ink); }
 .status-bar { position: absolute; left: 0; bottom: 0; height: 2px; background: var(--primary); transition: width var(--dur-base) var(--ease-out); }
