@@ -128,7 +128,11 @@ textarea.input { height: auto; min-height: 5.5rem; padding: 0.625rem 0.875rem; r
 
 /* ---------- home ---------- */
 .home { min-height: 100%; display: flex; flex-direction: column; }
-.home-top { display: flex; align-items: center; justify-content: space-between; padding: 1.25rem 1.5rem; }
+.shell { min-height: 100%; display: flex; flex-direction: column; }
+/* A página preenche o resto da altura: a grade estica o filho, e quem centraliza (center-screen) centraliza nela. */
+.shell-page { flex: 1 0 auto; display: grid; grid-template-columns: minmax(0, 1fr); }
+/* Mesma altura e mesmo recuo em toda tela de entrada, para o logo nunca mudar de lugar. */
+.site-top { display: flex; align-items: center; justify-content: space-between; gap: 1rem; min-height: 2rem; padding: 1.25rem 1.5rem; }
 .home-hero { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2rem; padding: 1.5rem 1rem 3rem; text-align: center; }
 /* A receita do hero do lawcore: Geist 500, tracking -0.022em, entrelinha 1.12, e uma linha de apoio calada. */
 .home-hero h1 { max-width: 14em; font-weight: 500; font-size: clamp(2.125rem, 1.25rem + 3.2vw, 3.5rem); line-height: 1.12; letter-spacing: -0.022em; text-wrap: balance; animation: pop-in var(--dur-pop) var(--ease-spring-pop); }
@@ -176,7 +180,7 @@ textarea.input { height: auto; min-height: 5.5rem; padding: 0.625rem 0.875rem; r
 .dropzone:hover, .dropzone.over { background: var(--soft-hover); }
 
 /* ---------- painel do professor ---------- */
-.dash { display: grid; grid-template-rows: auto 1fr; height: 100%; }
+.dash { display: grid; grid-template-rows: auto 1fr; height: 100dvh; }
 .dash-top { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 1.25rem; flex-wrap: wrap; }
 .dash-title { font-weight: 600; font-size: var(--text-lg); letter-spacing: -0.01em; }
 .dash-clock { font-family: var(--font-mono); font-size: var(--text-lg); font-variant-numeric: tabular-nums; }
@@ -229,7 +233,7 @@ textarea.input { height: auto; min-height: 5.5rem; padding: 0.625rem 0.875rem; r
 .code-view { margin: 0; padding: 0.75rem 1rem; border-radius: var(--radius-2xl); background: var(--surface-2); font-family: var(--font-mono); font-size: var(--text-xs); white-space: pre; overflow: auto; max-height: 22rem; }
 
 /* ---------- sala do aluno ---------- */
-.exam { display: grid; grid-template-rows: auto 1fr; height: 100%; background: var(--background); }
+.exam { display: grid; grid-template-rows: auto 1fr; height: 100dvh; background: var(--background); }
 .exam-top { display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0.875rem; flex-wrap: nowrap; }
 .exam-clock { font-family: var(--font-mono); font-size: var(--text-lg); font-variant-numeric: tabular-nums; }
 .exam-clock.low { color: var(--status-danger); }

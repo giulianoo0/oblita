@@ -8,7 +8,8 @@ import { formatClock, useObservable } from '../lib/store'
 import type { ConnectError } from '../net/link'
 import { BuildVersion } from '../ui/BuildVersion'
 import { DiaTextReveal } from '../ui/DiaTextReveal'
-import { Field, Logo, Markdown, Modal, Pill, Segmented, browserIssue, useTick } from '../ui/kit'
+import { useHideSiteHeader } from '../ui/SiteHeader'
+import { Field, Markdown, Modal, Pill, Segmented, browserIssue, useTick } from '../ui/kit'
 // Importado direto, não sob demanda: o editor precisa já estar carregado antes de a internet ser cortada.
 import { Beacon } from './Beacon'
 import { BlockLayout, LayoutMenu, useBlockLayout } from './BlockLayout'
@@ -191,7 +192,6 @@ function ConnectStep() {
   return (
     <div className="center-screen">
       <form className="gate" onSubmit={submit}>
-        <Logo />
         <h1>Entrar na prova</h1>
         {issue ? (
           <div className="errbox" role="alert">{issue}</div>
@@ -637,6 +637,7 @@ function answered(q: Question) {
 
 function ExamRoom() {
   const s = session
+  useHideSiteHeader()
   const exam = s.exam!
   const [questionId, setQuestionId] = useState(exam.questions[0]?.id)
   const [confirming, setConfirming] = useState(false)

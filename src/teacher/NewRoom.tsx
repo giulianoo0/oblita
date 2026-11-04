@@ -15,7 +15,7 @@ import type { Flow } from '../../shared/flow'
 import { DEFAULT_TEAM_SIZE, type RoomMode, type Timing } from '../../shared/protocol'
 import { imageToMarkdown } from '../lib/image'
 import { randomId } from '../lib/store'
-import { Field, Logo, Modal, Pill, Segmented, Switch, browserIssue } from '../ui/kit'
+import { Field, Modal, Pill, Segmented, Switch, browserIssue } from '../ui/kit'
 import { Room, activeRoom, registerRoom } from './room'
 
 interface DraftQuestion {
@@ -191,9 +191,6 @@ export default function NewRoom() {
   if (active) {
     return (
       <div className="page narrow">
-        <div className="page-top">
-          <Logo />
-        </div>
         <div className="card row">
           <h2 className="grow">{active.title}</h2>
           <Link className="pill primary" to={`/sala/${encodeURIComponent(active.id)}`}>
@@ -209,9 +206,6 @@ export default function NewRoom() {
 
   return (
     <div className="page narrow">
-      <div className="page-top">
-        <Logo />
-      </div>
       <div className="stack form-page">
         {issue && <div className="errbox">{issue}</div>}
         <header>
@@ -380,10 +374,6 @@ function AssistantModal({ open, onClose, title, duration }: { open: boolean; onC
           {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? 'Copiado' : 'Copiar pedido'}
         </Pill>
       </div>
-      <p className="small muted">
-        A IA precisa abrir o link. Se ela não navega na internet, <a href="/llms.txt" download="llms.txt">baixe o llms.txt</a> e anexe junto com o pedido.
-      </p>
-      <p className="small muted">O gabarito nunca sai do seu computador: ele não vai para os alunos nem para o programa.</p>
     </Modal>
   )
 }
