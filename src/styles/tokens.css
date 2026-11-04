@@ -116,7 +116,8 @@
     --soft: color-mix(in oklab, var(--text) 7%, transparent);
     --soft-hover: color-mix(in oklab, var(--text) 12%, transparent);
     --segment-track: rgb(255 255 255 / 6%);
-    --segment-chip: #282828;
+    --segment-chip: color-mix(in oklab, #fff 13%, transparent);
+    --segment-chip-shadow: none;
     --status-success: var(--green-500);
     --status-warning: var(--amber-500);
     --status-danger: var(--red-500);

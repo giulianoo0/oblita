@@ -8,7 +8,9 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
-const EDGE = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
+const MAC = process.platform === 'darwin'
+// Edge no Windows, Chrome no Mac; BROWSER troca o executável.
+const EDGE = process.env.BROWSER ?? (MAC ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe')
 const SHOTS = process.argv.find((a) => a.startsWith('--shots='))?.split('=')[1]
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -24,7 +26,9 @@ const freePort = () =>
 
 let vite, edge, userDir
 const killTree = (p) => {
-  if (p?.pid && p.exitCode === null) spawnSync('taskkill', ['/PID', String(p.pid), '/T', '/F'], { stdio: 'ignore' })
+  if (!p?.pid || p.exitCode !== null) return
+  if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(p.pid), '/T', '/F'], { stdio: 'ignore' })
+  else p.kill('SIGKILL')
 }
 async function cleanup() {
   killTree(edge)
@@ -143,7 +147,8 @@ async function clickFile(p, name) {
   await clickSel(p, `.file[title="${name}"] span`)
   await sleep(60)
 }
-const CTRL = 2
+// No Mac o Monaco usa Cmd onde o Windows usa Ctrl.
+const CTRL = MAC ? 4 : 2
 const SHIFT = 8
 async function press(key, modifiers = 0, code = `Key${key.toUpperCase()}`, vk = key.toUpperCase().charCodeAt(0)) {
   const base = { key, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk, modifiers }
@@ -238,6 +243,21 @@ async function run() {
   check('os dois recebem a semente', seeded.ok && seeded.a === seeded.ma && seeded.a.startsWith('int main'), seeded)
   check('modelo em LF no Windows', (await t('a', 't.modelEol()')) === '\n')
   await shot('01-sala')
+
+  // ---- rótulo do colega: inteiro enquanto mexe, só a inicial parado; e onde cada um está
+  await clickAt('a', 2, 5)
+  await type('x')
+  await settle(200)
+  const aLabel = () => t('b', `(() => { const h = document.querySelector('[class*="yRemoteSelectionHead-"]'); return h && getComputedStyle(h, '::after').content })()`)
+  const busy = await aLabel()
+  await shot('01b-colega-digitando')
+  await sleep(2900)
+  const idle = await aLabel()
+  check('nome inteiro enquanto o colega mexe, só a inicial parado', busy === '"Ana"' && idle === '"A"', { busy, idle })
+  await shot('01c-colega-parado')
+  const dots = await t('b', `({ file: document.querySelectorAll('.file .peer-dots i').length, tab: document.querySelectorAll('.exam-tab .peer-dots i').length, where: document.querySelector('.peer')?.title })`)
+  check('o colega aparece na aba da questão e no arquivo em que está', dots.file === 1 && dots.tab === 1 && /questão 1 · main\.cpp/.test(dots.where ?? ''), dots)
+  await reset()
 
   // ---- digitação concorrente, com a rede parada
   await ev('window.__host.pause()')
@@ -355,7 +375,7 @@ async function run() {
   cs = await caret()
   const img = await t('a', `document.querySelectorAll('img').length`)
   check('barra, aspas, quebra de linha e tag não escapam', cs.rules === 3 && cs.body !== 'none' && img === 0 && !cs.raw.includes('</style>') && !cs.raw.includes('\n'), cs)
-  check('o nome é cortado em 24 caracteres', [...cs.chips[0]].length <= 24, cs.chips)
+  check('o nome é cortado em 24 caracteres', [...cs.chips[0].split(' · ')[0]].length <= 24, cs.chips)
   await t('b', `t.session.awareness.setLocalStateField('user', { name: 'Bruno' })`)
   await t('b', `t.session.awareness.setLocalStateField('selection', { anchor: {}, head: { item: 'x' } })`)
   await settle(150)

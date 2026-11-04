@@ -118,9 +118,11 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url)
   if (url.origin !== location.origin || NO_CACHE.has(url.pathname)) return
   if (request.mode === 'navigate') {
+    // Abrir um arquivo do site em aba própria (o /llms.txt) também é navegação: ele vem do cache como está.
+    // O resto é rota do app e recebe a página.
     event.respondWith(
       newestCache()
-        .then((cache) => cache?.match('/'))
+        .then(async (cache) => (url.pathname !== '/' && (await cache?.match(url.pathname))) || cache?.match('/'))
         .then((hit) => hit ?? fetch(request)),
     )
     return

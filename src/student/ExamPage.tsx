@@ -1,4 +1,3 @@
-import { motion } from 'motion/react'
 import { Check, Copy, Lock, LoaderCircle, Maximize, MonitorUp, Send, WifiOff, X } from 'lucide-react'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
@@ -10,12 +9,14 @@ import { DiaTextReveal } from '../ui/DiaTextReveal'
 import { Field, Logo, Markdown, Modal, Pill, Segmented, browserIssue, useTick } from '../ui/kit'
 // Importado direto, não sob demanda: o editor precisa já estar carregado antes de a internet ser cortada.
 import { Beacon } from './Beacon'
-import { CodeWorkspace, useInternalClipboard } from './CodeWorkspace'
+import { CodeWorkspace, PeerDots, useInternalClipboard, usePeers } from './CodeWorkspace'
 import './exam.css'
 import { internalClipboard } from './proctor'
 import { defaultStarter, studentSession as session } from './session'
 
-const REVEAL_OVERLAY_MS = 2200
+// O Dia reveal do título dura 1500 ms; um respiro, e ele voa para o lugar dele no enunciado.
+const TITLE_HOLD_MS = 1750
+const MORPH_MS = 650
 
 const CONNECT_ERROR: Record<ConnectError, string> = {
   'bad-address': 'Esse endereço não é válido. Confira o IP que o professor mostrou.',
@@ -186,6 +187,8 @@ function ConnectStep() {
         ) : (
           <>
             <Segmented
+              stretch
+              label="Como entrar"
               value={mode}
               onChange={setMode}
               options={[
@@ -194,22 +197,22 @@ function ConnectStep() {
               ]}
             />
             {mode === 'ip' ? (
-              <Field label="IP do professor">
-                <input className="input mono" inputMode="url" autoComplete="off" spellCheck={false} value={address} onChange={(e) => setAddress(e.target.value)} />
+              <Field label="IP do professor" hint="Está no quadro ou na janela do programa do professor.">
+                <input className="input mono" inputMode="url" autoComplete="off" spellCheck={false} placeholder="192.168.0.10" value={address} onChange={(e) => setAddress(e.target.value)} />
               </Field>
             ) : (
-              <Field label="Código da sala">
-                <input className="input mono" autoComplete="off" spellCheck={false} value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} />
+              <Field label="Código da sala" hint="Só quando o professor abriu a sala pelo navegador.">
+                <input className="input mono" autoComplete="off" spellCheck={false} placeholder="ABC234" value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} />
               </Field>
             )}
             <Field label="Nome">
-              <input ref={nameRef} className="input" autoComplete="off" maxLength={60} value={name} onChange={(e) => setName(e.target.value)} />
+              <input ref={nameRef} className="input" autoComplete="off" maxLength={60} placeholder="Como o professor vai te ver" value={name} onChange={(e) => setName(e.target.value)} />
             </Field>
             <Field label="Matrícula (opcional)">
-              <input className="input" autoComplete="off" maxLength={30} value={enrollment} onChange={(e) => setEnrollment(e.target.value)} />
+              <input className="input" autoComplete="off" maxLength={30} placeholder="2024001234" value={enrollment} onChange={(e) => setEnrollment(e.target.value)} />
             </Field>
             {asked && (
-              <Field label="Senha da sala">
+              <Field label="Senha da sala" hint="O professor passa no quadro.">
                 <input className="input" type="password" autoFocus autoComplete="off" value={password} onChange={(e) => setPassword(e.target.value)} />
               </Field>
             )}
@@ -336,7 +339,12 @@ function TeamStep() {
   return (
     <form className="stack" style={{ gap: '1rem' }} onSubmit={submit}>
       <h1>Sua equipe</h1>
+      <p className="muted small gate-lead">
+        {s.config?.maxTeamSize ? `Equipes de até ${s.config.maxTeamSize} pessoas. ` : ''}Uma pessoa cria e passa o código; os colegas entram com ele.
+      </p>
       <Segmented
+        stretch
+        label="Criar ou entrar"
         value={mode}
         onChange={setMode}
         options={[
@@ -345,12 +353,12 @@ function TeamStep() {
         ]}
       />
       {mode === 'create' ? (
-        <Field label="Nome da equipe">
-          <input className="input" autoFocus autoComplete="off" maxLength={40} value={name} onChange={(e) => setName(e.target.value)} />
+        <Field label="Nome da equipe" hint="Você recebe um código para passar aos colegas.">
+          <input className="input" autoFocus autoComplete="off" maxLength={40} placeholder="Os Ponteiros" value={name} onChange={(e) => setName(e.target.value)} />
         </Field>
       ) : (
-        <Field label="Código da equipe">
-          <input data-paste-ok className="input mono" autoFocus autoComplete="off" spellCheck={false} maxLength={12} value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} />
+        <Field label="Código da equipe" hint="Peça para quem criou a equipe.">
+          <input data-paste-ok className="input mono team-code-input" autoFocus autoComplete="off" spellCheck={false} maxLength={12} placeholder="K7QX2M" value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} />
         </Field>
       )}
       {error && <div className="errbox" role="alert">{TEAM_ERROR[error] ?? 'Não deu certo. Tente de novo'}</div>}
@@ -405,6 +413,7 @@ function TeamCard() {
           {copied ? <Check size={16} /> : <Copy size={16} />}
         </Pill>
       </div>
+      <span className="small muted">Passe este código para os colegas entrarem.</span>
       <div className="team-members">
         <TeamMembers />
       </div>
@@ -569,6 +578,13 @@ function ExamRoom() {
   const [sending, setSending] = useState(false)
   const question = exam.questions.find((q) => q.id === questionId) ?? exam.questions[0]
   const manual = s.config?.flow === 'manual'
+  const peers = usePeers(s.awareness)
+  // Questão de código publica o arquivo pelo editor; as outras só dizem a questão.
+  const questionKey = question?.id
+  const codeQuestion = question?.type === 'code'
+  useEffect(() => {
+    if (questionKey && !codeQuestion) s.awareness.setLocalStateField('where', { q: questionKey, file: null })
+  }, [s, questionKey, codeQuestion])
   useInternalClipboard()
   // A edição fecha sozinha quando o tempo da questão acaba, sem esperar mensagem nenhuma.
   useTick(manual ? 1000 : 3_600_000)
@@ -587,8 +603,6 @@ function ExamRoom() {
     setQuestionId(fresh.id)
     setRevealedId(fresh.id)
     setRevealing(fresh)
-    const t = setTimeout(() => setRevealing(null), REVEAL_OVERLAY_MS)
-    return () => clearTimeout(t)
   }, [exam, manual])
 
   const locked = !s.ready
@@ -634,10 +648,11 @@ function ExamRoom() {
                 <button key={q.id} type="button" className="exam-tab" role="tab" aria-selected={q.id === question.id} title={q.title} onClick={() => setQuestionId(q.id)}>
                   {i + 1}
                   {answered(q) && <i className="dot" />}
+                  <PeerDots peers={peers.filter((p) => p.q === q.id)} />
                 </button>
               ))}
             </div>
-            <Statement question={question} reveal={!revealing && revealedId === question.id} />
+            <Statement question={question} reveal={!revealing && revealedId === question.id} landing={revealing?.id === question.id} />
             {!s.questionOpen(question.id) && <div className="badge danger" style={{ margin: '0 1.125rem 0.75rem', alignSelf: 'flex-start' }}>Tempo esgotado</div>}
             {s.config?.mode === 'group' && <GroupBar />}
           </section>
@@ -653,7 +668,7 @@ function ExamRoom() {
           </Pill>
         </div>
       </Modal>
-      {manual && <RevealOverlay question={revealing} />}
+      {manual && <RevealOverlay question={revealing} onDone={() => setRevealing(null)} />}
       {locked && <LockOverlay />}
       {/* Fora de .exam: ela some enquanto a prova está bloqueada, e o selo precisa continuar na tela. */}
       <Beacon code={s.beaconCode} />
@@ -662,32 +677,75 @@ function ExamRoom() {
 }
 
 // Quem está de fora da contagem (chegou depois) não vê nada disto: a questão só aparece.
-function RevealOverlay({ question }: { question: Question | null }) {
+function RevealOverlay({ question, onDone }: { question: Question | null; onDone: () => void }) {
   useTick(100)
   const left = Math.ceil((session.countdownEnds - performance.now()) / 1000)
   if (left > 0) {
     return (
-      <div className="reveal-overlay" role="timer" aria-live="polite">
-        <motion.div key={left} className="reveal-count" initial={{ opacity: 0, scale: 0.6, filter: 'blur(8px)' }} animate={{ opacity: 1, scale: 1, filter: 'blur(0px)' }} transition={{ type: 'spring', bounce: 0.25, duration: 0.6 }}>
-          {left}
-        </motion.div>
+      <div className="reveal-overlay" role="timer" aria-live="polite" aria-label={`Começa em ${left}`}>
+        <RollingDigit value={String(left)} />
       </div>
     )
   }
   if (!question) return null
+  return <RevealTitle key={question.id} question={question} onDone={onDone} />
+}
+
+// O mesmo dígito da tela de manutenção do juntos: o novo sobe de baixo com mola, o velho sai para cima.
+function RollingDigit({ value }: { value: string }) {
+  const [shown, setShown] = useState([{ value, key: 0, out: false }])
+  const last = shown[shown.length - 1]
+  if (last.value !== value) setShown([...shown.filter((d) => !d.out).map((d) => ({ ...d, out: true })), { value, key: last.key + 1, out: false }])
   return (
-    <div className="reveal-overlay">
-      <h1 className="reveal-title">
-        <DiaTextReveal key={question.id} text={question.title} />
+    <div className="roll-digit" aria-hidden="true">
+      {shown.map((d) => (
+        <span key={d.key} className={d.out ? 'out' : d.key ? 'in' : undefined} onAnimationEnd={d.out ? () => setShown((list) => list.filter((x) => x.key !== d.key)) : undefined}>
+          {d.value}
+        </span>
+      ))}
+    </div>
+  )
+}
+
+// O título nasce grande no centro com o Dia reveal e, ao terminar, voa e encolhe até o título do enunciado.
+function RevealTitle({ question, onDone }: { question: Question; onDone: () => void }) {
+  const title = useRef<HTMLHeadingElement>(null)
+  const [morph, setMorph] = useState<{ x: number; y: number; scale: number } | null>(null)
+  const done = useRef(onDone)
+  done.current = onDone
+  useEffect(() => {
+    const hold = setTimeout(() => {
+      const from = title.current?.getBoundingClientRect()
+      const to = document.querySelector('.exam-statement h2')?.getBoundingClientRect()
+      if (!from || !to || !from.width) return done.current()
+      const fromSize = parseFloat(getComputedStyle(title.current!).fontSize)
+      const toSize = parseFloat(getComputedStyle(document.querySelector('.exam-statement h2')!).fontSize)
+      setMorph({ x: to.left - from.left, y: to.top - from.top, scale: toSize / fromSize })
+    }, TITLE_HOLD_MS)
+    const end = setTimeout(() => done.current(), TITLE_HOLD_MS + MORPH_MS)
+    return () => {
+      clearTimeout(hold)
+      clearTimeout(end)
+    }
+  }, [])
+  return (
+    <div className={`reveal-overlay${morph ? ' leaving' : ''}`}>
+      <h1
+        ref={title}
+        className="reveal-title"
+        style={morph ? { transform: `translate(${morph.x}px, ${morph.y}px) scale(${morph.scale})` } : undefined}
+      >
+        <DiaTextReveal text={question.title} />
       </h1>
     </div>
   )
 }
 
-function Statement({ question, reveal }: { question: Question; reveal?: boolean }) {
+// `landing`: o título ainda está voando da revelação até aqui, e só aparece quando chega.
+function Statement({ question, reveal, landing }: { question: Question; reveal?: boolean; landing?: boolean }) {
   return (
     <div className="exam-statement" role="tabpanel">
-      <h2>{reveal ? <DiaTextReveal key={question.id} text={question.title} /> : question.title}</h2>
+      <h2 style={landing ? { visibility: 'hidden' } : undefined}>{question.title}</h2>
       <div className="small muted">{question.points === 1 ? '1 ponto' : `${question.points} pontos`}</div>
       <Markdown key={`${question.id}-${reveal ? 'r' : 'n'}`} text={question.statement} reveal={reveal} />
       {question.type === 'code' &&

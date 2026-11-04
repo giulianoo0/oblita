@@ -9,7 +9,7 @@ import { monaco, openModel } from './monaco'
 
 type Editor = monaco.editor.IStandaloneCodeEditor
 type Model = monaco.editor.ITextModel
-type PeerState = { user?: { name?: unknown }; selection?: { anchor?: unknown; head?: unknown } | null }
+type PeerState = { user?: { name?: unknown }; selection?: { anchor?: unknown; head?: unknown } | null; where?: { q?: unknown; file?: unknown } | null }
 
 interface FileEntry {
   ytext: Y.Text
@@ -23,9 +23,14 @@ export interface Peer {
   id: number
   name: string
   hue: number
+  // Onde o colega está agora, para o aluno achar a equipe sem procurar de aba em aba.
+  q: string | null
+  file: string | null
 }
 
 const MAX_LABEL = 24
+// O nome inteiro em cima do cursor cobre a linha de cima: só aparece enquanto o colega mexe.
+const LABEL_ACTIVE_MS = 2500
 const LF = monaco.editor.EndOfLineSequence.LF
 const EOL_REPAIR = 'eol-repair'
 
@@ -45,6 +50,7 @@ function forgetWithDoc(doc: ExamDoc) {
 }
 
 const validId = (id: number) => Number.isSafeInteger(id) && id >= 0
+const shortString = (v: unknown) => (typeof v === 'string' && v.length <= 64 ? v : null)
 const hueOf = (id: number) => (Math.imul(id, 2654435761) >>> 0) % 360
 
 function peerName(state: PeerState) {
@@ -64,7 +70,8 @@ export function peersOf(awareness: Awareness): Peer[] {
     if (id === awareness.clientID || !validId(id) || !(state as PeerState).user) return
     const name = peerName(state as PeerState)
     // Depois de um F5 o estado antigo ainda vive 30 s: a mesma pessoa não aparece duas vezes.
-    byName.set(name, { id, name, hue: hueOf(id) })
+    const where = (state as PeerState).where
+    byName.set(name, { id, name, hue: hueOf(id), q: shortString(where?.q), file: shortString(where?.file) })
   })
   return [...byName.values()]
 }
@@ -78,6 +85,9 @@ export class CollabEditor {
   private file: string | null = null
   private style = document.createElement('style')
   private release: (() => void)[] = []
+  private lastSelection = new Map<number, string>()
+  private activeUntil = new Map<number, number>()
+  private labelTimer = 0
 
   constructor(
     private editor: Editor,
@@ -95,10 +105,14 @@ export class CollabEditor {
     this.paint()
     const onChange = () => {
       this.cleanSelections()
+      this.trackActivity()
       this.paint()
     }
     awareness.on('change', onChange)
-    this.release.push(() => awareness.off('change', onChange))
+    this.release.push(() => {
+      awareness.off('change', onChange)
+      clearTimeout(this.labelTimer)
+    })
   }
 
   private bindKeys() {
@@ -158,14 +172,39 @@ export class CollabEditor {
     })
   }
 
+  // Cursor que andou ou texto que mudou acende o nome por alguns segundos; parado, fica só a inicial.
+  private trackActivity() {
+    const now = Date.now()
+    const seen = new Set<number>()
+    this.awareness.getStates().forEach((raw, id) => {
+      if (id === this.awareness.clientID || !validId(id)) return
+      seen.add(id)
+      const key = JSON.stringify((raw as PeerState).selection ?? null)
+      if (this.lastSelection.get(id) === key) return
+      this.lastSelection.set(id, key)
+      this.activeUntil.set(id, now + LABEL_ACTIVE_MS)
+    })
+    for (const id of this.lastSelection.keys()) {
+      if (seen.has(id)) continue
+      this.lastSelection.delete(id)
+      this.activeUntil.delete(id)
+    }
+    clearTimeout(this.labelTimer)
+    const next = Math.min(...[...this.activeUntil.values()].filter((t) => t > now))
+    if (Number.isFinite(next)) this.labelTimer = window.setTimeout(() => this.paint(), next - now + 20)
+  }
+
   private paint() {
     let css = ''
+    const now = Date.now()
     this.awareness.getStates().forEach((state, id) => {
       if (id === this.awareness.clientID || !validId(id)) return
       const hue = hueOf(id)
+      const name = peerName(state as PeerState)
+      const active = (this.activeUntil.get(id) ?? 0) > now
       css += `.yRemoteSelection-${id}{background:hsl(${hue} 70% 50% / 0.3)}`
       css += `.yRemoteSelectionHead-${id}{border-left-color:hsl(${hue} 70% 45%)}`
-      css += `.yRemoteSelectionHead-${id}::after{background:hsl(${hue} 70% 36%);content:${cssString(peerName(state as PeerState))}}`
+      css += `.yRemoteSelectionHead-${id}::after{background:hsl(${hue} 70% 36%);content:${cssString(active ? name : Array.from(name)[0].toUpperCase())};opacity:${active ? 1 : 0.6}}`
     })
     if (this.style.textContent !== css) this.style.textContent = css
   }
@@ -316,6 +355,7 @@ export class CollabEditor {
     const prev = this.editor.getModel()
     this.questionId = questionId
     this.file = entry ? file : null
+    this.awareness.setLocalStateField('where', { q: questionId, file: this.file })
     if (prev === (entry?.model ?? null)) return
     if (prev && save) viewStates.set(prev.uri.toString(), this.editor.saveViewState())
     this.editor.setModel(entry?.model ?? null)

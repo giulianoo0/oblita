@@ -11,8 +11,9 @@
 .tile-wrap { position: relative; min-width: 0; }
 a.tile { text-decoration: none; }
 .tile-corner { max-width: calc(100% - 1rem); flex-wrap: wrap; justify-content: flex-end; }
-.tile-move { position: absolute; top: 0.5rem; left: 0.5rem; z-index: 1; max-width: 45%; height: 1.5rem; padding: 0 0.5rem; border: 0; border-radius: var(--radius-full); background: var(--scrim); backdrop-filter: var(--scrim-filter); color: var(--on-scrim); font-size: var(--text-2xs); font-weight: 600; cursor: pointer; }
-.tile-move option { color: initial; }
+.tile-move { position: absolute; top: 0.5rem; left: 0.5rem; z-index: 1; display: inline-flex; align-items: center; gap: 0.25rem; max-width: 45%; height: 1.5rem; padding: 0 0.5rem; border: 0; border-radius: var(--radius-full); background: var(--scrim); backdrop-filter: var(--scrim-filter); color: var(--on-scrim); font-size: var(--text-2xs); font-weight: 600; cursor: pointer; }
+.tile-move > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile-move:active { transform: scale(0.97); }
 
 .conn-label { font-size: var(--text-xs); color: var(--text-muted); }
 .conn-lock { flex: none; display: inline-flex; color: var(--text-muted); }

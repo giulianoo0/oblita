@@ -54,6 +54,12 @@
 .fp-chip { flex: none; font-family: var(--font-mono); cursor: help; }
 
 .peers { display: flex; gap: 0.25rem; }
+.peer-dots { display: inline-flex; align-items: center; margin-left: auto; padding-left: 0.25rem; flex: none; }
+.peer-dots i { width: 0.4375rem; height: 0.4375rem; border-radius: 50%; box-shadow: 0 0 0 1.5px var(--surface, #222); }
+.peer-dots i + i { margin-left: -0.125rem; }
+.exam-tab .peer-dots { margin-left: 0.125rem; padding-left: 0; }
+/* .file span tem flex: 1 para o nome; os pontinhos ficam do tamanho deles. */
+.file .peer-dots { flex: none; overflow: visible; }
 .peer { display: grid; place-items: center; width: 1.25rem; height: 1.25rem; border-radius: 50%; color: #fff; font-size: var(--text-2xs); font-weight: 600; }
 .editor-pos { font-family: var(--font-mono); opacity: 0.65; font-variant-numeric: tabular-nums; }
 

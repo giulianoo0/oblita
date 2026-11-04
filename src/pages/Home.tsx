@@ -71,6 +71,7 @@ export function Home() {
         <h1 className="home-title">
           provas online de código <span className="home-word">sem cola.</span>
         </h1>
+        <p className="home-lede">C e C++ sem internet: o aluno digita o IP do professor e faz a prova em tela cheia, com a tela gravada. Tudo fica no computador do professor.</p>
         <div className="role-grid">
           <motion.button type="button" className="role-card" aria-expanded={role === 'student'} onClick={() => setRole('student')} whileTap={{ scale: 0.99 }} hidden={role === 'student'}>
             <GraduationCap size={28} />

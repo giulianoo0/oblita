@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'motion/react'
 import { X } from 'lucide-react'
-import { useEffect, useState, type ButtonHTMLAttributes, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type KeyboardEvent, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import { IMAGE_MARKDOWN } from '../../shared/exam'
 import { formatClock } from '../lib/store'
@@ -28,35 +29,181 @@ export function Logo({ size = 1.5 }: { size?: number }) {
   )
 }
 
-export function Field({ label, children }: { label: string; children: ReactNode }) {
+// `hint` fica embaixo do rótulo, mais calada: diz o que o campo faz sem virar parágrafo.
+export function Field({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
   return (
     <label className="field">
       <span>{label}</span>
+      {hint && <small className="field-hint">{hint}</small>}
       {children}
     </label>
   )
 }
 
-export function Segmented<T extends string>({ value, onChange, options }: { value: T; onChange: (v: T) => void; options: { value: T; label: string }[] }) {
+// O fundo compartilhado do lawcore (SlidingPill): uma pílula só, medida do escolhido, que desliza até o
+// novo. No primeiro desenho, ao remedir e pelo teclado ela já está no lugar.
+function SlidingPill({ value }: { value: unknown }) {
+  const ref = useRef<HTMLSpanElement>(null)
+  const placedFor = useRef<{ value: unknown } | undefined>(undefined)
+  useLayoutEffect(() => {
+    const pill = ref.current
+    const group = pill?.parentElement
+    if (!pill || !group) return
+    const place = () => {
+      const target = group.querySelector<HTMLElement>('[aria-checked="true"]')
+      if (!target) return void delete group.dataset.placed
+      pill.style.setProperty('--pill-left', `${target.offsetLeft}px`)
+      pill.style.setProperty('--pill-top', `${target.offsetTop}px`)
+      pill.style.setProperty('--pill-width', `${target.offsetWidth}px`)
+      pill.style.setProperty('--pill-height', `${target.offsetHeight}px`)
+      group.dataset.placed = ''
+    }
+    const changed = placedFor.current !== undefined && placedFor.current.value !== value
+    placedFor.current = { value }
+    let current = true
+    if (changed) {
+      pill.dataset.sliding = ''
+      place()
+      void Promise.allSettled(pill.getAnimations().map((a) => a.finished)).then(() => current && delete pill.dataset.sliding)
+    } else place()
+    const observer = new ResizeObserver(place)
+    observer.observe(group)
+    return () => {
+      current = false
+      observer.disconnect()
+    }
+  }, [value])
+  return <span ref={ref} className="seg-pill" aria-hidden="true" />
+}
+
+// Uma escolha entre poucas, todas à vista. Setas andam entre as opções, como num grupo de rádio.
+// `stretch` divide a linha inteira em partes iguais (formulário); sem ele, ocupa só o que precisa.
+export function Segmented<T extends string>({ value, onChange, options, label, stretch }: { value: T; onChange: (v: T) => void; options: { value: T; label: string }[]; label?: string; stretch?: boolean }) {
+  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0
+    if (!step) return
+    e.preventDefault()
+    const i = options.findIndex((o) => o.value === value)
+    const next = options[(i + step + options.length) % options.length]
+    onChange(next.value)
+    ;(e.currentTarget.querySelector(`[data-value="${CSS.escape(next.value)}"]`) as HTMLElement | null)?.focus()
+  }
   return (
-    <div className="segmented" role="group">
+    <div className={`segmented${stretch ? ' stretch' : ''}`} role="radiogroup" aria-label={label} onKeyDown={onKey}>
       {options.map((o) => (
-        <button key={o.value} type="button" aria-pressed={o.value === value} onClick={() => onChange(o.value)}>
-          {o.value === value && <motion.span layoutId={`seg-${options[0].value}`} className="chip" transition={settle} />}
+        <button key={o.value} type="button" role="radio" data-value={o.value} aria-checked={o.value === value} tabIndex={o.value === value ? 0 : -1} onClick={() => onChange(o.value)}>
           {o.label}
         </button>
       ))}
+      <SlidingPill value={value} />
     </div>
   )
 }
 
-export function Switch({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
+export function Switch({ label, hint, checked, onChange }: { label: string; hint?: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
     <label className="switch">
-      <span>{label}</span>
+      <span className="switch-text">
+        <span>{label}</span>
+        {hint && <small>{hint}</small>}
+      </span>
       <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
       <i />
     </label>
+  )
+}
+
+// O "Exibir" do lawcore: o popover sai do gatilho com mola e blur e volta amortecido.
+// Fecha com Esc, clique fora ou ao escolher. Fica num portal, então nenhum overflow o corta.
+export function Popover({ trigger, label, className, title, align = 'start', children }: { trigger: ReactNode; label: string; className?: string; title?: string; align?: 'start' | 'end'; children: (close: () => void) => ReactNode }) {
+  const [open, setOpen] = useState(false)
+  const [present, setPresent] = useState(false)
+  const [pos, setPos] = useState<{ top: number; left: number; origin: string } | null>(null)
+  const button = useRef<HTMLButtonElement>(null)
+  const popup = useRef<HTMLDivElement>(null)
+  if (open && !present) setPresent(true)
+  const close = () => setOpen(false)
+
+  useLayoutEffect(() => {
+    if (!open || !button.current) return
+    const r = button.current.getBoundingClientRect()
+    const width = popup.current?.offsetWidth ?? 224
+    const height = popup.current?.offsetHeight ?? 0
+    const below = r.bottom + 8 + height < innerHeight - 16 || r.top < height + 24
+    const left = Math.min(Math.max(16, align === 'end' ? r.right - width : r.left), innerWidth - width - 16)
+    setPos({ top: below ? r.bottom + 8 : r.top - 8 - height, left, origin: `${(align === 'end' ? width : 0) + (align === 'end' ? r.right - width - left : r.left - left)}px ${below ? '0' : '100%'}` })
+    const el = popup.current
+    if (el) {
+      el.setAttribute('data-starting-style', '')
+      void el.offsetWidth
+      el.removeAttribute('data-starting-style')
+      el.querySelector<HTMLElement>('[role=menuitemradio],[role=menuitem]')?.focus({ preventScroll: true })
+    }
+  }, [open, present, align])
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: PointerEvent) => {
+      if (!popup.current?.contains(e.target as Node) && !button.current?.contains(e.target as Node)) close()
+    }
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      close()
+      button.current?.focus()
+    }
+    document.addEventListener('pointerdown', onDown, true)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('pointerdown', onDown, true)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  useEffect(() => {
+    if (open || !present) return
+    const t = setTimeout(() => setPresent(false), 420)
+    return () => clearTimeout(t)
+  }, [open, present])
+
+  return (
+    <>
+      <button ref={button} type="button" className={className} aria-label={label} title={label} aria-haspopup="menu" aria-expanded={open} onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpen((v) => !v) }}>
+        {trigger}
+      </button>
+      {present &&
+        createPortal(
+          <div
+            ref={popup}
+            className="popover"
+            role="menu"
+            aria-label={title ?? label}
+            data-ending-style={!open ? '' : undefined}
+            inert={!open || undefined}
+            style={{ top: pos?.top ?? -9999, left: pos?.left ?? -9999, transformOrigin: pos?.origin }}
+            onTransitionEnd={(e) => !open && e.target === e.currentTarget && (e.propertyName === 'scale' || e.propertyName === 'opacity') && setPresent(false)}
+          >
+            {title && <div className="popover-title">{title}</div>}
+            {children(close)}
+          </div>,
+          document.body,
+        )}
+    </>
+  )
+}
+
+export function PopoverRow({ label, hint, checked, onSelect }: { label: string; hint?: string; checked?: boolean; onSelect: () => void }) {
+  return (
+    <button type="button" role={checked === undefined ? 'menuitem' : 'menuitemradio'} aria-checked={checked} className="popover-row" onClick={onSelect}>
+      <span className="popover-text">
+        <span>{label}</span>
+        {hint && <small>{hint}</small>}
+      </span>
+      {checked && (
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="m3.5 8.4 2.9 2.9 6.1-6.6" />
+        </svg>
+      )}
+    </button>
   )
 }
 

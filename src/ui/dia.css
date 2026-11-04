@@ -78,23 +78,61 @@
   text-align: center;
   animation: settle-in var(--dur-base) var(--ease-out);
 }
-.reveal-count {
-  font-family: var(--font-serif);
-  font-size: clamp(6rem, 22vw, 16rem);
-  font-weight: 500;
+/* Curvas da tela de manutenção do juntos (as mesmas do lawcore): mola com leve passada para entrar,
+   amortecida para sair, e a da metamorfose, que passa uns 12% e volta. */
+.reveal-overlay {
+  --spring-pop: linear(0, 0.058, 0.191, 0.352, 0.513, 0.656, 0.774, 0.865, 0.932, 0.977, 1.005, 1.021, 1.027, 1.028, 1.026, 1.022, 1.017, 1.013, 1.009, 1.006, 1.003, 1.001, 1, 1, 1);
+  --spring-settle: linear(0, 0.073, 0.222, 0.382, 0.527, 0.648, 0.742, 0.814, 0.868, 0.907, 0.935, 0.955, 0.969, 0.978, 0.985, 0.99, 1);
+  --spring-morph: linear(0, 0.041, 0.145, 0.286, 0.443, 0.598, 0.741, 0.863, 0.961, 1.035, 1.084, 1.114, 1.125, 1.124, 1.114, 1.097, 1.078, 1.058, 1.039, 1.023, 1.009, 0.999, 0.991, 0.987, 0.985, 0.984, 0.985, 0.987, 0.989, 0.992, 0.994, 0.996, 1);
+  transition: background-color 450ms var(--ease-out);
+}
+.roll-digit {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: clamp(7rem, 16vw, 11rem);
+  aspect-ratio: 5 / 7;
+  border-radius: clamp(1.75rem, 4vw, 2.75rem);
+  background: color-mix(in oklab, var(--text) 6%, transparent);
+  overflow: hidden;
+  font-family: var(--font-sans);
+  font-size: clamp(5rem, 11vw, 8rem);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
   line-height: 1;
-  color: var(--brand);
+}
+.roll-digit > span { grid-area: 1 / 1; }
+.roll-digit > .in { animation: digit-in 600ms var(--spring-pop) both; }
+.roll-digit > .out { animation: digit-out 360ms var(--spring-settle) both; }
+@keyframes digit-in {
+  from { opacity: 0; transform: translateY(55%) scale(0.9); filter: blur(6px); }
+  to { opacity: 1; transform: none; filter: none; }
+}
+@keyframes digit-out {
+  from { opacity: 1; transform: none; filter: none; }
+  to { opacity: 0; transform: translateY(-50%) scale(0.9); filter: blur(6px); }
 }
 .reveal-title {
   max-width: 18em;
-  font-family: var(--font-serif);
+  font-family: var(--font-sans);
   font-size: clamp(2rem, 6vw, 4.5rem);
-  font-weight: 500;
+  font-weight: 600;
   line-height: 1.05;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.03em;
+  transform-origin: 0 0;
+  transition: transform 650ms var(--spring-morph);
+}
+/* Voando para o enunciado: o fundo some e deixa ver a prova chegando por baixo. */
+.reveal-overlay.leaving {
+  background: transparent;
+  pointer-events: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .roll-digit > .in, .roll-digit > .out { animation: none; }
+  .roll-digit > .out { display: none; }
+  .reveal-title { transition: none; }
   .dia-reveal {
     animation: none;
     background-image: none;

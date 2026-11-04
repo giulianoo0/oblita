@@ -392,11 +392,12 @@ export default function Player({ room, student, seekTo, alerts }: { room: Room; 
           onPointerCancel={() => setDrag(null)}
         >
           <div className="seek-fill" style={{ width: percent(shown) }} />
-          {alerts.map((a, i) =>
+          {/* Os graves vêm por último para ficar por cima quando caem no mesmo ponto da barra. */}
+          {[...alerts].sort((a, b) => Number(a.severe) - Number(b.severe)).map((a, i) =>
             a.at >= t0 && a.at <= t1 ? (
               <span
                 key={`${a.id}:${i}`}
-                className="seek-mark"
+                className={`seek-mark${a.severe ? '' : ' mild'}`}
                 role="button"
                 title={alertLabel(a.kind)}
                 style={{ left: percent(a.at) }}

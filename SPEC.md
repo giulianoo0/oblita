@@ -228,7 +228,7 @@ Dois modos, escolhidos ao criar a sala. Quem controla e encerra é sempre o prof
 **Regras do modo manual**
 
 - Vale igual para toda a sala: liberar e retirar afeta todos juntos.
-- **Revelação:** ao liberar, os alunos veem uma contagem de 3 s em tela inteira. O conteúdo só sai do professor quando ela acaba, então não dá para ler antes pelo DevTools, e o tempo da questão começa nesse instante. Depois o título aparece grande com o Dia text reveal (`src/ui/DiaTextReveal.tsx`, trazido do lawcore), e o enunciado varre na sequência. Quem entra depois recebe a questão sem contagem.
+- **Revelação:** ao liberar, os alunos veem uma contagem de 3 s em tela inteira, com o dígito rolando como na tela de manutenção do juntos. O conteúdo só sai do professor quando ela acaba, então não dá para ler antes pelo DevTools, e o tempo da questão começa nesse instante. Depois o título aparece grande com o Dia text reveal (`src/ui/DiaTextReveal.tsx`, trazido do lawcore), voa até o lugar dele no enunciado, e o resto varre com o shimmer. Quem entra depois recebe a questão sem contagem.
 - Questão não liberada nunca chega ao aluno: nem título, nem enunciado, nem exemplos, nem código inicial.
 - O código inicial só entra no documento da equipe quando a questão é liberada.
 - **Ao fechar uma questão** (tempo acabou ou o professor retirou), o professor congela a resposta naquele instante e corrige aquela versão. Edições posteriores são ignoradas. O CRDT não rejeita uma atualização por questão, então o congelamento é feito na entrega, no professor.
@@ -254,7 +254,7 @@ Decisão do dono, substituindo os grupos definidos pelo professor e a trava por 
 **Edição**
 
 - Yjs com `y-monaco`. O documento vive em todo mundo e no professor, e funciona também na prova individual, para o desfazer ser igual nos dois modos.
-- Cada integrante vê os cursores e seleções dos outros, com o nome em cima do cursor.
+- Cada integrante vê os cursores e seleções dos outros. O nome inteiro aparece em cima do cursor enquanto o colega mexe; parado, fica só a inicial, para não cobrir a linha de cima. Pontinhos coloridos na aba da questão e na lista de arquivos mostram onde cada colega está.
 - **Ctrl+Z / Cmd+Z** usa `Y.UndoManager`, que desfaz só o que a própria pessoa fez, sem apagar o que o colega escreveu. Refazer com Ctrl+Y e Ctrl+Shift+Z / Cmd+Shift+Z.
 - Quem fica sem rede continua editando. Ao voltar, troca-se o vetor de estado e tudo se mescla, sem conflito.
 - O professor semeia o código inicial. Os alunos nunca semeiam, senão dois integrantes duplicariam o texto.

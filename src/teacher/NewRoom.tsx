@@ -1,4 +1,4 @@
-import { ChevronDown, FileJson, ImagePlus, Loader2, Plus, Sparkles, Trash2, Upload } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Copy, FileJson, ImagePlus, Loader2, Plus, Sparkles, Trash2, Upload } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
@@ -15,7 +15,7 @@ import type { Flow } from '../../shared/flow'
 import { DEFAULT_TEAM_SIZE, type RoomMode, type Timing } from '../../shared/protocol'
 import { imageToMarkdown } from '../lib/image'
 import { randomId } from '../lib/store'
-import { Field, Logo, Pill, Segmented, Switch, browserIssue } from '../ui/kit'
+import { Field, Logo, Modal, Pill, Segmented, Switch, browserIssue } from '../ui/kit'
 import { Room, activeRoom, registerRoom } from './room'
 
 interface DraftQuestion {
@@ -96,6 +96,7 @@ export default function NewRoom() {
   const [drafts, setDrafts] = useState<DraftQuestion[]>([blank()])
   const [errors, setErrors] = useState<string[]>([])
   const [creating, setCreating] = useState(false)
+  const [assistant, setAssistant] = useState(false)
 
   useEffect(() => {
     let live = true
@@ -203,82 +204,89 @@ export default function NewRoom() {
     )
   }
 
+  const flowHint = flow === 'free' ? 'Todas as questões saem juntas, com um tempo total.' : 'Você libera cada questão ao vivo, com contagem na tela de todos.'
+  const timingHint = timing === 'clock-in' ? 'Cada aluno começa quando bater o ponto. O tempo conta a partir dali.' : 'A prova começa para todos quando você clicar em Começar.'
+
   return (
     <div className="page narrow">
       <div className="page-top">
         <Logo />
       </div>
-      <div className="stack">
+      <div className="stack form-page">
         {issue && <div className="errbox">{issue}</div>}
-        <h1 className="page-title">Nova sala</h1>
+        <header>
+          <h1 className="page-title">Nova sala</h1>
+          <p className="muted">Uma prova por vez neste computador. Os alunos entram pelo seu IP, e tudo fica aqui.</p>
+        </header>
 
-        <div className="card stack">
+        <section className="card stack form-section">
+          <h2>Prova</h2>
           <Field label="Título">
             <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Prova 1 de Algoritmos" />
           </Field>
-          <div className="row wrap">
+          <div className="form-row">
             {flow === 'free' && (
-              <Field label="Minutos">
-                <input className="input num" style={{ width: '7rem' }} type="number" min={1} value={duration} onChange={(e) => setDuration(Math.max(1, Number(e.target.value)))} />
+              <Field label="Duração" hint="Em minutos">
+                <input className="input num" type="number" min={1} value={duration} onChange={(e) => setDuration(Math.max(1, Number(e.target.value)))} />
               </Field>
             )}
-            <div className="grow">
-              <Field label="Senha da sala">
-                <input className="input" type="password" autoComplete="new-password" placeholder="Recomendada" value={password} onChange={(e) => setPassword(e.target.value)} />
-              </Field>
-            </div>
+            <Field label="Senha da sala" hint="Recomendada. Você passa no quadro, e sem ela ninguém entra.">
+              <input className="input" type="password" autoComplete="new-password" placeholder="Opcional" value={password} onChange={(e) => setPassword(e.target.value)} />
+            </Field>
           </div>
-          <div className="row wrap" style={{ gap: '1.25rem' }}>
-            <div className="field">
-              <span>Como é feita</span>
-              <Segmented value={mode} onChange={setMode} options={[{ value: 'individual', label: 'Individual' }, { value: 'group', label: 'Em equipe' }]} />
-            </div>
-            <div className="field">
-              <span>Andamento</span>
-              <Segmented value={flow} onChange={setFlow} options={[{ value: 'free', label: 'Livre' }, { value: 'manual', label: 'Manual' }]} />
-            </div>
-            {flow === 'free' && (
-              <div className="field">
-                <span>Início</span>
-                <Segmented value={timing} onChange={setTiming} options={[{ value: 'clock-in', label: 'Cada um no seu tempo' }, { value: 'global', label: 'Todos juntos' }]} />
-              </div>
-            )}
+        </section>
+
+        <section className="card stack form-section">
+          <h2>Formato</h2>
+          <div className="field">
+            <span>Como é feita</span>
+            <small className="field-hint">{mode === 'individual' ? 'Cada aluno com a própria prova.' : 'Os alunos montam equipes com um código e editam o mesmo código juntos.'}</small>
+            <Segmented stretch label="Como é feita" value={mode} onChange={setMode} options={[{ value: 'individual', label: 'Individual' }, { value: 'group', label: 'Em equipe' }]} />
           </div>
           {mode === 'group' && (
-            <div>
-              <Field label="Máximo por equipe">
-                <input
-                  className="input num"
-                  style={{ width: '7rem' }}
-                  type="number"
-                  min={MIN_TEAM}
-                  max={MAX_TEAM}
-                  value={teamSize}
-                  onChange={(e) => setTeamSize(e.target.value)}
-                  onBlur={() => setTeamSize(String(teamSizeOf(teamSize)))}
-                />
-              </Field>
+            <Field label="Máximo por equipe" hint={`De ${MIN_TEAM} a ${MAX_TEAM} pessoas.`}>
+              <input
+                className="input num short"
+                type="number"
+                min={MIN_TEAM}
+                max={MAX_TEAM}
+                value={teamSize}
+                onChange={(e) => setTeamSize(e.target.value)}
+                onBlur={() => setTeamSize(String(teamSizeOf(teamSize)))}
+              />
+            </Field>
+          )}
+          <div className="field">
+            <span>Andamento</span>
+            <small className="field-hint">{flowHint}</small>
+            <Segmented stretch label="Andamento" value={flow} onChange={setFlow} options={[{ value: 'free', label: 'Livre' }, { value: 'manual', label: 'Manual' }]} />
+          </div>
+          {flow === 'free' && (
+            <div className="field">
+              <span>Início</span>
+              <small className="field-hint">{timingHint}</small>
+              <Segmented stretch label="Início" value={timing} onChange={setTiming} options={[{ value: 'clock-in', label: 'Cada um no seu tempo' }, { value: 'global', label: 'Todos juntos' }]} />
             </div>
           )}
-          <div>
-            <Switch label="Botão Testar para os alunos" checked={compiler} onChange={setCompiler} />
-            <Switch label="Exigir rede sem internet" checked={isolation} onChange={setIsolation} />
-            <Switch label="Gravar as telas" checked={record} onChange={setRecord} />
-          </div>
-        </div>
+        </section>
 
-        <div className="card stack">
-          <div className="row">
+        <section className="card form-section">
+          <h2>Vigilância</h2>
+          <Switch label="Gravar as telas" hint="Fica no seu computador, com o player e a exportação." checked={record} onChange={setRecord} />
+          <Switch label="Exigir rede sem internet" hint="Só entrega a prova a quem não alcança a internet." checked={isolation} onChange={setIsolation} />
+          <Switch label="Botão Testar" hint="O aluno roda os testes ocultos uma vez por minuto e vê só quantos passaram." checked={compiler} onChange={setCompiler} />
+        </section>
+
+        <section className="card stack form-section">
+          <div className="row wrap">
             <h2 className="grow">Questões</h2>
-            <Segmented value={source} onChange={setSource} options={[{ value: 'json', label: 'Arquivo' }, { value: 'build', label: 'Montar aqui' }]} />
+            <Segmented label="Origem das questões" value={source} onChange={setSource} options={[{ value: 'json', label: 'Arquivo' }, { value: 'build', label: 'Montar aqui' }]} />
           </div>
           {source === 'json' ? (
             <>
+              <AssistantBanner onOpen={() => setAssistant(true)} />
               <DropFile label={examFile ? `${examFile.questions.length} questões em "${examFile.title}"` : 'Prova (exam.json)'} onFile={loadExam} done={!!examFile} />
               <DropFile label={solFile ? `Gabarito com ${solFile.solutions.length} respostas` : 'Gabarito (solutions.json), opcional'} onFile={loadSolutions} done={!!solFile} disabled={!examFile} />
-              <a className="pill sm" style={{ alignSelf: 'flex-start' }} href="/llms.txt" target="_blank" rel="noreferrer">
-                <Sparkles size={14} /> llms.txt
-              </a>
             </>
           ) : (
             <>
@@ -292,17 +300,73 @@ export default function NewRoom() {
               </div>
             </>
           )}
-        </div>
+        </section>
 
         {errors.length > 0 && <div className="errbox">{errors.join('\n')}</div>}
-        <div>
+        <div className="form-actions">
           <Pill tone="brand" size="lg" disabled={creating || !!issue} onClick={() => void create()}>
             {creating && <Loader2 size={18} className="spin" />}
             {creating ? 'Criando sala' : 'Criar sala'}
           </Pill>
         </div>
       </div>
+      <AssistantModal open={assistant} onClose={() => setAssistant(false)} title={title} duration={flow === 'free' ? duration : null} />
     </div>
+  )
+}
+
+const LLMS_URL = 'https://oblita.giuli.dev/llms.txt'
+
+function AssistantBanner({ onOpen }: { onOpen: () => void }) {
+  return (
+    <button type="button" className="assistant-banner" onClick={onOpen}>
+      <span className="assistant-icon"><Sparkles size={16} /></span>
+      <span className="grow">
+        <b>Gerar com assistente de IA</b>
+        <small>ChatGPT, Claude ou Gemini montam os dois arquivos a partir do seu material.</small>
+      </span>
+      <ChevronRight size={16} />
+    </button>
+  )
+}
+
+function AssistantModal({ open, onClose, title, duration }: { open: boolean; onClose: () => void; title: string; duration: number | null }) {
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    if (!copied) return
+    const t = setTimeout(() => setCopied(false), 1600)
+    return () => clearTimeout(t)
+  }, [copied])
+  const prompt = [
+    `Leia ${LLMS_URL} e siga à risca o formato descrito lá.`,
+    `Monte uma prova de C e C++${title.trim() ? ` chamada "${title.trim()}"` : ''}${duration ? ` para ${duration} minutos` : ''}, a partir do material que vou mandar.`,
+    'Devolva dois arquivos, cada um num bloco de código JSON:',
+    '1. exam.json: só os enunciados, exemplos e código inicial, sem nenhuma resposta.',
+    '2. solutions.json: o gabarito, com testes ocultos para cada questão de código.',
+    'Não invente campos que não estão no llms.txt.',
+  ].join('\n')
+  return (
+    <Modal open={open} title="Gerar a prova com IA" onClose={onClose}>
+      <ol className="assistant-steps">
+        <li>
+          <b>Copie o pedido</b> e cole no ChatGPT, Claude ou Gemini, junto com o seu material: lista de exercícios, PDF da matéria, provas antigas.
+        </li>
+        <li>
+          A IA lê as regras em <a href="/llms.txt" target="_blank" rel="noreferrer" className="mono">oblita.giuli.dev/llms.txt</a> e devolve <code>exam.json</code> e <code>solutions.json</code>.
+        </li>
+        <li>Salve os dois arquivos e solte nos campos da tela anterior. Se algo estiver fora do formato, a tela diz o que corrigir.</li>
+      </ol>
+      <div className="assistant-prompt">
+        <pre>{prompt}</pre>
+        <Pill size="sm" tone="primary" onClick={() => void navigator.clipboard.writeText(prompt).then(() => setCopied(true), () => {})}>
+          {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? 'Copiado' : 'Copiar pedido'}
+        </Pill>
+      </div>
+      <p className="small muted">
+        A IA precisa abrir o link. Se ela não navega na internet, <a href="/llms.txt" download="llms.txt">baixe o llms.txt</a> e anexe junto com o pedido.
+      </p>
+      <p className="small muted">O gabarito nunca sai do seu computador: ele não vai para os alunos nem para o programa.</p>
+    </Modal>
   )
 }
 

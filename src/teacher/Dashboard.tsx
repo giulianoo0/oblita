@@ -1,12 +1,12 @@
 import { AnimatePresence, motion } from 'motion/react'
-import { AlertTriangle, Check, Download, EyeOff, Loader2, Lock, PenLine, Users, WifiOff } from 'lucide-react'
+import { AlertTriangle, Check, ChevronDown, Download, EyeOff, Loader2, Lock, PenLine, Users, WifiOff } from 'lucide-react'
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode, type Ref } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import type { Group, Phase } from '../../shared/protocol'
 import { formatClock, useObservable } from '../lib/store'
 import { detectHub } from '../net/bus'
-import { Avatar, Logo, Modal, Pill, Segmented, Switch, useTick } from '../ui/kit'
+import { Avatar, Logo, Modal, Pill, Popover, PopoverRow, Segmented, Switch, useTick } from '../ui/kit'
 import { alertLabel, canStreamToDisk, download, exportRoomZip, safeName } from './exportZip'
 import { openRoom, type AlertEntry, type Grade, type Room, type Student, type Team } from './room'
 import './dash.css'
@@ -686,14 +686,31 @@ const Tile = memo(function Tile({ ref, room, clientId, name, thumb, online, sign
         </div>
       </Link>
       {groups && (
-        <select className="tile-move" aria-label={`Equipe de ${name}`} value={groupId ?? ''} onChange={(e) => e.target.value && room.moveToGroup(clientId, e.target.value)}>
-          {!groupId && <option value="">Equipe</option>}
-          {groups.map((g) => (
-            <option key={g.id} value={g.id}>
-              {g.name}
-            </option>
-          ))}
-        </select>
+        <Popover
+          className="tile-move"
+          label={`Equipe de ${name}`}
+          title="Mover para a equipe"
+          trigger={
+            <>
+              <span>{groups.find((g) => g.id === groupId)?.name ?? 'Equipe'}</span>
+              <ChevronDown size={11} />
+            </>
+          }
+        >
+          {(close) =>
+            groups.map((g) => (
+              <PopoverRow
+                key={g.id}
+                label={g.name}
+                checked={g.id === groupId}
+                onSelect={() => {
+                  room.moveToGroup(clientId, g.id)
+                  close()
+                }}
+              />
+            ))
+          }
+        </Popover>
       )}
     </motion.div>
   )

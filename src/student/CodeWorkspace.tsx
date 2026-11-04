@@ -5,7 +5,7 @@ import type { CodeQuestion, Lang } from '../../shared/exam'
 import { FILE_NAME, MAX_CODE_BYTES, MAX_FILES, RUN_LIMITS } from '../../shared/protocol'
 import { useObservable } from '../lib/store'
 import { Modal, Pill, Segmented, useTick } from '../ui/kit'
-import { CollabEditor, peersOf } from './collabEditor'
+import { CollabEditor, peersOf, type Peer } from './collabEditor'
 import { registerCompletions } from './completions'
 import './exam.css'
 import { EDITOR_FONT, monaco, remeasureWhenFontLoads, showDiagnostics } from './monaco'
@@ -110,26 +110,47 @@ const EDITOR_OPTIONS: monaco.editor.IStandaloneEditorConstructionOptions = {
   ariaLabel: 'Editor de código',
 }
 
-// Os colegas no cabeçalho do editor. O nome só entra como texto.
-function Presence({ awareness }: { awareness: Awareness }) {
+export function usePeers(awareness: Awareness) {
   const [, bump] = useReducer((n: number) => n + 1, 0)
   useEffect(() => {
     awareness.on('change', bump)
     return () => awareness.off('change', bump)
   }, [awareness])
+  return peersOf(awareness)
+}
+
+// Pontinhos coloridos de quem está ali: na aba da questão e na linha do arquivo.
+export function PeerDots({ peers }: { peers: Peer[] }) {
+  if (!peers.length) return null
+  return (
+    <span className="peer-dots" title={peers.map((p) => p.name).join(', ')}>
+      {peers.slice(0, 4).map((p) => (
+        <i key={p.id} style={{ background: `hsl(${p.hue} 70% 50%)` }} />
+      ))}
+    </span>
+  )
+}
+
+// Os colegas no cabeçalho do editor. O nome só entra como texto.
+function Presence({ peers, questions }: { peers: Peer[]; questions: string[] }) {
   return (
     <div className="peers">
-      {peersOf(awareness).map((peer) => (
-        <span key={peer.id} className="peer" title={peer.name} style={{ background: `hsl(${peer.hue} 70% 36%)` }}>
-          {Array.from(peer.name)[0]?.toUpperCase()}
-        </span>
-      ))}
+      {peers.map((peer) => {
+        const index = peer.q ? questions.indexOf(peer.q) : -1
+        const where = index < 0 ? '' : ` · questão ${index + 1}${peer.file ? ` · ${peer.file}` : ''}`
+        return (
+          <span key={peer.id} className="peer" title={`${peer.name}${where}`} style={{ background: `hsl(${peer.hue} 70% 36%)` }}>
+            {Array.from(peer.name)[0]?.toUpperCase()}
+          </span>
+        )
+      })}
     </div>
   )
 }
 
 export function CodeWorkspace({ question }: { question: CodeQuestion }) {
   const s = useObservable(studentSession)
+  const peers = usePeers(s.awareness)
   const answer = s.answerOf(question.id)
   const open = s.questionOpen(question.id)
   const lang = answer?.type === 'code' ? answer.lang : question.languages[0]
@@ -310,6 +331,7 @@ export function CodeWorkspace({ question }: { question: CodeQuestion }) {
             ) : (
               <div key={file} className="file" role="option" tabIndex={0} aria-selected={file === active} title={file} onClick={() => selectFile(file)} onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && selectFile(file)} onDoubleClick={() => setRenaming({ from: file, value: file })}>
                 <span>{file}</span>
+                <PeerDots peers={peers.filter((p) => p.q === question.id && p.file === file)} />
                 <button type="button" className="x" aria-label={`Renomear ${file}`} title="Renomear" onClick={(e) => { e.stopPropagation(); setRenaming({ from: file, value: file }) }}>
                   <Pencil size={12} />
                 </button>
@@ -325,7 +347,7 @@ export function CodeWorkspace({ question }: { question: CodeQuestion }) {
         <div className="editor-host">
           <div className="editor-tabs">
             <span className="editor-name grow">{active}</span>
-            <Presence awareness={s.awareness} />
+            <Presence peers={peers} questions={s.saved?.exam?.questions.map((q) => q.id) ?? []} />
             {totalSize > MAX_CODE_BYTES && <span className="badge danger">Código grande demais</span>}
             <span ref={posRef} className="editor-pos">Ln 1, Col 1</span>
             {question.languages.length > 1 ? (
