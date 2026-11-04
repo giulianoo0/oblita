@@ -509,6 +509,8 @@ async function run() {
   await settle()
   check('clicar na pasta recolhe', (await t('a', `!document.querySelector('.file[title="lib/util.h"]') && document.querySelector('.file[title="lib"]').getAttribute('aria-expanded') === 'false'`)))
   await clickSel('a', '.file[title="lib"] .file-name')
+  // Dois arquivos na pasta: quem está num deles precisa ir para o mesmo, não para o vizinho.
+  await t('b', `t.session.doc.addFile('q1', 'lib/outro.h', '')`)
   await settle()
   await t('a', `document.querySelector('.file[title="lib"]').focus()`)
   await press('F2', 0, 'F2', 113)
@@ -517,19 +519,50 @@ async function run() {
   await shot('07b-renomear')
   await enter()
   await settle(150)
-  check('pasta renomeada com F2 chega ao colega, com o texto', (await t('b', `t.names('q1').join()`)) === 'main.cpp,src/util.h' && (await main('b', 'q1', 'src/util.h')) === '#pragma once\n')
+  check('pasta renomeada com F2 chega ao colega, com o texto', (await t('b', `t.names('q1').join()`)) === 'main.cpp,src/outro.h,src/util.h' && (await main('b', 'q1', 'src/util.h')) === '#pragma once\n')
   check('quem estava no arquivo vai junto, dos dois lados', (await t('a', 't.file()')) === 'src/util.h' && (await t('b', 't.file()')) === 'src/util.h', [await t('a', 't.file()'), await t('b', 't.file()')])
   await t('a', `t.session.doc.addFile('q1', 'src/io/ler.cpp', '')`)
   await settle(100)
   await clickSel('b', '[aria-label="Apagar src"]')
   await settle(300)
   const confirm = await t('b', `document.querySelector('.modal')?.textContent ?? ''`)
-  check('apagar pasta pede confirmação com quantos arquivos', /Apagar src\?/.test(confirm) && /Os 2 arquivos/.test(confirm), confirm)
+  check('apagar pasta pede confirmação com quantos arquivos', /Apagar src\?/.test(confirm) && /Os 3 arquivos/.test(confirm), confirm)
   await shot('07c-apagar-pasta')
   await clickSel('b', '.modal .pill.danger')
   await settle(300)
   check('pasta apagada pelo colega some com o que estava dentro', (await t('a', `t.names('q1').join()`)) === 'main.cpp' && (await t('a', `t.session.doc.folders('q1').length`)) === 0 && (await t('a', 't.file()')) === 'main.cpp')
   check('o único arquivo de código não pode ser apagado', (await t('a', `document.querySelector('[aria-label="Apagar main.cpp"]').disabled`)) === true)
+
+  // Rodar de verdade: o clang do navegador compila e linka o .cpp da subpasta.
+  await t('a', `(() => {
+    const d = t.session.doc
+    d.addFile('q1', 'lib/util.h', '#pragma once\\nint dobro(int x);\\n')
+    d.addFile('q1', 'lib/util.cpp', '#include "util.h"\\nint dobro(int x) { return 2 * x; }\\n')
+    const y = d.files('q1').get('main.cpp')
+    y.doc.transact(() => { y.delete(0, y.length); y.insert(0, '#include <cstdio>\\n#include "lib/util.h"\\nint main() { printf("%d\\\\n", dobro(21)); }\\n') })
+  })()`)
+  await settle(150)
+  // O primeiro worker de execução do Vite às vezes não sobe a tempo ("não pôde ser iniciado"): uma segunda vez.
+  let ran
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await clickSel('a', '[title="Rodar (Ctrl+Enter)"]')
+    for (let i = 0; i < 360; i++) {
+      ran = await t('a', `({ ...t.session.runOutput, main: t.text('q1', 'main.cpp'), names: t.names('q1').join() })`)
+      if (ran.state === 'done' || ran.state === 'compile-error') break
+      await sleep(250)
+    }
+    if (ran.error !== 'O programa não pôde ser iniciado') break
+  }
+  check('Rodar compila e linka o projeto com subpasta', ran.state === 'done' && ran.stdout === '42\n', ran)
+  await clickFile('a', 'main.cpp')
+  await clickAt('a', 4, 1)
+  await type('#include "')
+  await settle(500)
+  const sug = await t('a', `[...document.querySelectorAll('.suggest-widget .monaco-list-row')].map((e) => e.getAttribute('aria-label') ?? e.textContent).join('|')`)
+  check('o #include sugere o header da subpasta, com o caminho', /lib\/util\.h/.test(sug), sug)
+  await press('Escape', 0, 'Escape', 27)
+  await t('b', `t.session.doc.removeFolder('q1', 'lib')`)
+  await reset()
 
   // ---- vazamento
   const base = await t('a', 't.listeners()')
