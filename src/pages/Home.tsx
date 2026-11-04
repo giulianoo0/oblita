@@ -17,26 +17,11 @@ function GithubMark() {
   )
 }
 
-// "sem cola." é serifada: se a animação começa antes da fonte chegar, a palavra troca de largura no meio
-// e a linha pula. O título espera a fonte, mas nunca mais que 700 ms.
-function useSerifReady() {
-  const [ready, setReady] = useState(() => typeof document === 'undefined' || !document.fonts || document.fonts.check('500 1em "Geist Serif"'))
-  useEffect(() => {
-    if (ready) return
-    const done = () => setReady(true)
-    const timer = window.setTimeout(done, 700)
-    document.fonts.load('500 1em "Geist Serif"').then(done, done)
-    return () => clearTimeout(timer)
-  }, [ready])
-  return ready
-}
-
 export function Home() {
   const nav = useNavigate()
   const [role, setRole] = useState<'student' | null>(null)
   const [ip, setIp] = useState('')
   const [invalid, setInvalid] = useState(false)
-  const fontReady = useSerifReady()
 
   // Sem prova em andamento neste computador, nenhuma versão precisa ficar fixada.
   useEffect(() => {
@@ -70,7 +55,7 @@ export function Home() {
     <div className="home">
       <main className="home-hero">
         <Eagle size={112} className="home-eagle" />
-        <h1 className="home-title" data-ready={fontReady || undefined}>
+        <h1 className="home-title">
           <span className="home-line">provas online de</span> <span className="home-line">código <span className="home-word">sem cola.</span></span>
         </h1>
         <div className="role-grid">

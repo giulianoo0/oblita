@@ -136,7 +136,7 @@ textarea.input { height: auto; min-height: 5.5rem; padding: 0.625rem 0.875rem; r
 .home-hero { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2rem; padding: 1.5rem 1rem 3rem; text-align: center; }
 /* A receita do hero do lawcore: Geist 500, tracking -0.022em, entrelinha 1.12, e uma linha de apoio calada. */
 .home-hero h1 { max-width: 14em; font-weight: 500; font-size: clamp(2.125rem, 1.25rem + 3.2vw, 3.5rem); line-height: 1.12; letter-spacing: -0.022em; text-wrap: balance; animation: pop-in var(--dur-pop) var(--ease-spring-pop); }
-.home-word { display: inline-block; font-family: var(--font-serif); font-weight: 500; letter-spacing: -0.01em; color: var(--brand); }
+.home-word { color: var(--brand); }
 .home-lede { max-width: 34rem; margin-top: -0.75rem; font-size: clamp(var(--text-lg), 0.95rem + 0.35vw, 1.1875rem); line-height: 1.5; color: var(--text-muted); text-wrap: pretty; animation: settle-in var(--dur-settle) var(--ease-out) 80ms backwards; }
 .home-cta { height: 4.5rem; padding: 0 2.5rem; border: 0; border-radius: var(--radius-full); background: var(--brand); color: var(--on-brand); font-weight: 600; font-size: 1.5rem; letter-spacing: -0.02em; text-decoration: none; display: inline-flex; align-items: center; gap: 0.75rem; transition: background-color var(--dur-fast), transform var(--dur-press) var(--ease-out); }
 .home-cta:hover { background: var(--brand-hover); }
@@ -144,7 +144,6 @@ textarea.input { height: auto; min-height: 5.5rem; padding: 0.625rem 0.875rem; r
 .home-title { animation: pop-in var(--dur-pop) var(--ease-spring-pop); }
 /* A quebra é sempre depois de "de"; só numa tela estreita demais cada linha quebra sozinha. */
 .home-line { display: block; }
-.home-title:not([data-ready]) { opacity: 0; animation: none; }
 /* No celular não cabe tudo: a versão sai do cabeçalho, mas o aviso de atualização (o botão) fica. */
 @media (max-width: 30rem) { .site-top span.build-version { display: none; } }
 .status-chip { position: relative; display: inline-flex; white-space: nowrap; align-items: center; gap: 0.375rem; height: 2rem; padding: 0 0.75rem; border-radius: var(--radius-full); background: var(--soft); font-size: var(--text-sm); font-weight: 500; color: var(--text-muted); overflow: hidden; }

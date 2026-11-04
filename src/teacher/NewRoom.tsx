@@ -201,8 +201,6 @@ export default function NewRoom() {
     )
   }
 
-  const flowHint = flow === 'free' ? 'Todas as questões saem juntas, com um tempo total.' : 'Você libera cada questão ao vivo, com contagem na tela de todos.'
-  const timingHint = timing === 'clock-in' ? 'Cada aluno começa quando bater o ponto. O tempo conta a partir dali.' : 'A prova começa para todos quando você clicar em Começar.'
 
   return (
     <div className="page narrow">
@@ -219,11 +217,11 @@ export default function NewRoom() {
           </Field>
           <div className="form-row">
             {flow === 'free' && (
-              <Field label="Duração" hint="Em minutos">
+              <Field label="Duração (min)">
                 <input className="input num" type="number" min={1} value={duration} onChange={(e) => setDuration(Math.max(1, Number(e.target.value)))} />
               </Field>
             )}
-            <Field label="Senha da sala" hint="Recomendada. Você passa no quadro, e sem ela ninguém entra.">
+            <Field label="Senha da sala">
               <input className="input" type="password" autoComplete="new-password" placeholder="Opcional" value={password} onChange={(e) => setPassword(e.target.value)} />
             </Field>
           </div>
@@ -232,11 +230,10 @@ export default function NewRoom() {
         <FoldCard title="Formato">
           <div className="field">
             <span>Como é feita</span>
-            <small className="field-hint">{mode === 'individual' ? 'Cada aluno com a própria prova.' : 'Os alunos montam equipes com um código e editam o mesmo código juntos.'}</small>
             <Segmented stretch label="Como é feita" value={mode} onChange={setMode} options={[{ value: 'individual', label: 'Individual' }, { value: 'group', label: 'Em equipe' }]} />
           </div>
           {mode === 'group' && (
-            <Field label="Máximo por equipe" hint={`De ${MIN_TEAM} a ${MAX_TEAM} pessoas.`}>
+            <Field label="Máximo por equipe">
               <input
                 className="input num short"
                 type="number"
@@ -250,22 +247,20 @@ export default function NewRoom() {
           )}
           <div className="field">
             <span>Andamento</span>
-            <small className="field-hint">{flowHint}</small>
             <Segmented stretch label="Andamento" value={flow} onChange={setFlow} options={[{ value: 'free', label: 'Livre' }, { value: 'manual', label: 'Manual' }]} />
           </div>
           {flow === 'free' && (
             <div className="field">
               <span>Início</span>
-              <small className="field-hint">{timingHint}</small>
               <Segmented stretch label="Início" value={timing} onChange={setTiming} options={[{ value: 'clock-in', label: 'Cada um no seu tempo' }, { value: 'global', label: 'Todos juntos' }]} />
             </div>
           )}
         </FoldCard>
 
         <FoldCard title="Vigilância" list>
-          <Switch label="Gravar as telas" hint="Fica no seu computador, com o player e a exportação." checked={record} onChange={setRecord} />
-          <Switch label="Exigir rede sem internet" hint="Só entrega a prova a quem não alcança a internet." checked={isolation} onChange={setIsolation} />
-          <Switch label="Botão Testar" hint="O aluno roda os testes ocultos uma vez por minuto e vê só quantos passaram." checked={compiler} onChange={setCompiler} />
+          <Switch label="Gravar as telas" checked={record} onChange={setRecord} />
+          <Switch label="Exigir rede sem internet" checked={isolation} onChange={setIsolation} />
+          <Switch label="Botão Testar" checked={compiler} onChange={setCompiler} />
         </FoldCard>
 
         <FoldCard title="Questões" aside={<Segmented label="Origem das questões" value={source} onChange={setSource} options={[{ value: 'json', label: 'Arquivo' }, { value: 'build', label: 'Montar aqui' }]} />}>
