@@ -955,18 +955,16 @@ async function s5(h) {
   })
 
   w = await world(h, { timing: 'clock-in', mode: 'group' })
-  await h.case('clock-in em equipe: o relógio é um só', async () => {
+  await h.case('clock-in em equipe: o ponto de um começa todos, com um relógio só', async () => {
     a = await joined(h, 'Ana')
     b = await joined(h, 'Beto')
     const code = (await teamUp(a, 'Time')).code
     await joinTeam(b, code)
     await start(w)
     await a.call(() => T.s.clockIn())
-    await waitExam(a)
+    // O ponto da Ana começa a equipe: o Beto recebe a prova sem bater o dele.
+    await Promise.all([waitExam(a), waitExam(b)])
     const endA = (await a.view()).endsAt
-    await sleep(1200)
-    await b.call(() => T.s.clockIn())
-    await waitExam(b)
     eq((await b.view()).endsAt, endA, 'mesmo fim na equipe')
     clean(w.t, a, b)
   })
@@ -1245,30 +1243,29 @@ async function s7(h) {
   const w3 = await world(h, { mode: 'group', maxTeamSize: 2 })
   const g = await joined(h, 'Gil')
   const i = await joined(h, 'Iara')
-  await h.case('quem termina antes não congela o código final da equipe', async () => {
+  await h.case('em equipe, quem entrega encerra a prova de todos', async () => {
     const team = await teamUp(g, 'Time')
     await joinTeam(i, team.code)
     await start(w3)
     await Promise.all([waitExam(g), waitExam(i)])
-    await g.call((code) => T.setCode('q1', 'main.c', code), SUM_WRONG)
-    await i.until((code) => T.code('q1', 'main.c') === code, [SUM_WRONG], { what: 'código do Gil' })
+    await g.call((code) => T.setCode('q1', 'main.c', code), SUM_OK)
+    await i.until((code) => T.code('q1', 'main.c') === code, [SUM_OK], { what: 'código do Gil' })
     await g.call(() => T.s.finish())
-    await w3.t.until((cid) => T.room.students.get(cid).finishedAt, [g.cid], { what: 'Gil terminou' })
-    await w3.t.until((cid) => T.team(cid).submissions.q1?.answer.files['main.c'] !== undefined, [g.cid], { what: 'entrega do Gil' })
-    // Depois de terminar, a policy não aceita mais edição dele.
-    await g.call(() => T.s.doc.files('q1').get('main.c').insert(0, '/*DEPOIS_DO_FIM*/'))
-    await i.call((code) => T.setCode('q1', 'main.c', code), SUM_OK)
-    await sleep(700)
-    await w3.t.call(() => T.room.end())
+    await i.until(() => T.s.phase === 'ended' && T.s.saved.finished, [], { what: 'Iara encerrada junto' })
+    await w3.t.until((cid) => T.room.students.get(cid).finishedAt, [i.cid], { what: 'fim da Iara registrado' })
     const key = `g:${team.id}`
+    eq((await w3.sum()).teams.find((t) => t.key === key).closed, true, 'equipe fechada')
+    // Depois da entrega, a policy não aceita mais edição de ninguém da equipe.
+    await i.call(() => T.s.doc.files('q1').get('main.c').insert(0, '/*DEPOIS_DO_FIM*/'))
+    await sleep(700)
     const final = (await w3.sum()).teams.find((t) => t.key === key).submissions.q1.answer.files['main.c']
-    assert(!final.includes('DEPOIS_DO_FIM'), 'edição de quem já terminou entrou')
-    assert(final.includes('a + b'), `congelou o código de quando o colega terminou: ${final.slice(0, 80)}`)
+    assert(!final.includes('DEPOIS_DO_FIM'), 'edição depois da entrega entrou')
+    assert(final.includes('a + b'), `entrega com o código do Gil: ${final.slice(0, 80)}`)
     const grade = await w3.t.until((k) => {
       const g = T.room.teams.get(k).grades.q1
       return g && !['pending', 'running'].includes(g.status) ? g : null
     }, [key], { what: 'nota final', timeout: 150_000, every: 200 })
-    eq([grade.status, grade.points], ['done', 10], 'nota do código final')
+    eq([grade.status, grade.points], ['done', 10], 'nota do código entregue')
     clean(w3.t, g, i)
   }, 180_000)
 
@@ -2075,6 +2072,26 @@ async function s11(h) {
     await a.until(() => T.s.questionOpen('q4'), [], { what: 'reabriu' })
   })
 
+  await h.case('entregar uma questão fecha só ela, e a próxima liberada chega normal', async () => {
+    await a.call(() => T.s.setAnswer('q4', { type: 'text', text: 'entregue' }))
+    await w.t.until((cid) => T.room.teamOf(T.room.students.get(cid)).answers.q4?.answer.text === 'entregue', [a.cid], { what: 'rascunho', timeout: 8000 })
+    await a.call(() => T.s.handQuestion('q4'))
+    await w.t.until((cid) => T.room.teamOf(T.room.students.get(cid)).handed?.includes('q4'), [a.cid], { what: 'professor marcou a entrega', timeout: 8000 })
+    eq(await a.call(() => T.s.questionOpen('q4')), false, 'fechada para quem entregou')
+    eq(await a.call(() => T.s.phase), 'running', 'continua na prova')
+    await a.call(() => T.raw({ t: 'draft', questionId: 'q4', answer: { type: 'text', text: 'depois de entregar' }, rev: 9999 }))
+    await w.t.call(() => T.room.releaseQuestion('q3'))
+    await a.until(() => T.s.exam.questions.some((q) => q.id === 'q3'), [], { what: 'q3 chega depois da entrega' })
+    eq(await a.call(() => T.s.questionOpen('q3')), true, 'a nova está aberta')
+    const team = await w.team(a.cid)
+    eq(team.answers.q4.answer.text, 'entregue', 'rascunho depois da entrega negado')
+    eq(team.submissions.q4.answer.text, 'entregue', 'entrega')
+    // F5 do aluno: volta sabendo o que já entregou.
+    await a.call(() => T.s.link.close())
+    await a.until(() => T.s.linkState === 'online' && T.s.welcomed, [], { what: 'reconectou' })
+    eq(await a.call(() => T.s.questionOpen('q4')), false, 'continua fechada depois de reconectar')
+  })
+
   await h.case('teste de questão fechada é recusado sem gastar o minuto', async () => {
     await w.t.call(() => T.room.withdrawQuestion('q1'))
     await a.until(() => !T.s.exam.questions.some((q) => q.id === 'q1'), [], { what: 'q1 fora' })
@@ -2100,6 +2117,7 @@ async function s11(h) {
     const team = await w.team(a.cid)
     // q1 foi retirada de novo com o texto errado: é essa versão que vale, e encerrar não a refaz.
     eq(team.submissions.q1.answer.files['main.c'], SUM_WRONG, 'última versão congelada')
+    eq(team.submissions.q4.answer.text, 'entregue', 'questão entregue não é trocada pelo rascunho')
     assert(!!team.closed, 'fechada')
     await sane(w)
   })

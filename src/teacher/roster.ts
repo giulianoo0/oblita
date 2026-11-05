@@ -25,6 +25,8 @@ export interface RosterRow {
   hay: string
   // Tudo o que aparece na linha: igual, a linha não precisa redesenhar.
   sig: string
+  // Só na linha de equipe: quantos integrantes ela soma.
+  members?: number
 }
 
 export interface RosterSource {
@@ -91,6 +93,39 @@ export function buildRows(src: RosterSource, now: number): RosterRow[] {
     rows.push({ id: s.clientId, name: s.name, enrollment, team: teamName, presence, finished, cells, answered, total, alerts: s.alerts, last, lastLabel, hay: normalize(`${s.name} ${enrollment} ${teamName}`), sig })
   }
   return rows
+}
+
+// Uma linha por equipe, para corrigir e conferir o que a equipe entregou junta. A nota já é da
+// equipe; presença e alertas somam os integrantes. Quem está sem equipe continua com a própria linha.
+export function buildTeamRows(src: RosterSource, now: number): RosterRow[] {
+  const { questions } = src.exam
+  const loose: Student[] = []
+  const byGroup = new Map<string, Student[]>()
+  const known = new Set(src.config.groups.map((g) => g.id))
+  for (const s of src.students.values()) {
+    if (s.groupId && known.has(s.groupId)) byGroup.set(s.groupId, [...(byGroup.get(s.groupId) ?? []), s])
+    else loose.push(s)
+  }
+  const rows: RosterRow[] = []
+  for (const g of src.config.groups) {
+    const members = (byGroup.get(g.id) ?? []).sort((a, b) => collator.compare(a.name, b.name))
+    if (!members.length) continue
+    const team = src.teamOf(members[0])
+    const cells = questions.map((q) => cellOf(team, q))
+    const answered = questions.map((q) => answeredOf(team, q))
+    const total = Object.keys(team.grades).length ? src.scoreOf(team).earned : null
+    const states = members.map(presenceOf)
+    const presence: Presence = states.includes('noscreen') ? 'noscreen' : states.includes('online') ? 'online' : 'offline'
+    const finished = !!team.closed || members.every((m) => m.finishedAt)
+    const alerts = members.reduce((n, m) => n + m.alerts, 0)
+    const last = Math.max(...members.map((m) => Math.max(m.lastBeat, m.finishedAt ?? 0, m.lastAlert?.at ?? 0)))
+    const names = members.map((m) => m.name).join(', ')
+    const lastLabel = activityLabel(last, now)
+    const sig = JSON.stringify([g.name, names, presence, finished, cells, total, alerts, lastLabel])
+    rows.push({ id: g.id, name: g.name, enrollment: names, team: g.name, presence, finished, cells, answered, total, alerts, last, lastLabel, hay: normalize(`${g.name} ${members.map((m) => `${m.name} ${m.enrollment ?? ''}`).join(' ')}`), sig, members: members.length })
+  }
+  const solo = buildRows({ ...src, students: new Map(loose.map((s) => [s.clientId, s])) }, now)
+  return [...rows, ...solo.map((r) => ({ ...r, team: '' }))]
 }
 
 // ---- filtros
@@ -197,10 +232,12 @@ export interface RosterState {
   sort: Sort
   // null: o painel decide pela fase da prova.
   view: View | null
+  // Só no modo em equipe: as notas com uma linha por equipe.
+  byTeam: boolean
 }
 
 const VIEW_PARAM: Record<View, string> = { wall: 'telas', results: 'notas' }
-const PARAMS = ['busca', 'filtro', 'questao', 'ordem', 'vista']
+const PARAMS = ['busca', 'filtro', 'questao', 'ordem', 'vista', 'por']
 
 export function readQuery(params: URLSearchParams): RosterState {
   const filters = (params.get('filtro') ?? '')
@@ -213,18 +250,19 @@ export function readQuery(params: URLSearchParams): RosterState {
   const sort: Sort = dot > 0 && isKey(key) && (dir === 'asc' || dir === 'desc') ? { key, dir } : DEFAULT_SORT
   const vista = params.get('vista')
   const view = (Object.keys(VIEW_PARAM) as View[]).find((v) => VIEW_PARAM[v] === vista) ?? null
-  return { query: { text: params.get('busca') ?? '', filters, question: params.get('questao') || null }, sort, view }
+  return { query: { text: params.get('busca') ?? '', filters, question: params.get('questao') || null }, sort, view, byTeam: params.get('por') === 'equipe' }
 }
 
 export function writeQuery(params: URLSearchParams, state: RosterState): URLSearchParams {
   const next = new URLSearchParams(params)
   for (const p of PARAMS) next.delete(p)
-  const { query, sort, view } = state
+  const { query, sort, view, byTeam } = state
   if (query.text.trim()) next.set('busca', query.text)
   if (query.filters.length) next.set('filtro', query.filters.join(','))
   if (query.question) next.set('questao', query.question)
   if (sort.key !== DEFAULT_SORT.key || sort.dir !== DEFAULT_SORT.dir) next.set('ordem', `${sort.key}.${sort.dir}`)
   if (view) next.set('vista', VIEW_PARAM[view])
+  if (byTeam) next.set('por', 'equipe')
   return next
 }
 
@@ -236,8 +274,21 @@ const csvCell = (v: unknown) => {
   return `"${/^[=+\-@\t\r]/.test(text) ? `'${text}` : text}"`
 }
 
-export function rowsCsv(rows: RosterRow[], questions: Question[], mode: RoomMode) {
+export function rowsCsv(rows: RosterRow[], questions: Question[], mode: RoomMode, byTeam = false) {
   const group = mode === 'group'
+  if (group && byTeam) {
+    const header = ['equipe', 'integrantes', 'status', ...questions.map((q) => q.id), 'total', 'alertas', 'ultima_atividade']
+    const lines = rows.map((r) => [
+      r.members ? r.name : '',
+      r.members ? r.enrollment : r.name,
+      PRESENCE_LABEL[r.presence],
+      ...r.cells.map((c) => (typeof c === 'object' && c !== null ? c.points : '')),
+      r.total ?? '',
+      r.alerts,
+      r.last ? new Date(r.last).toISOString() : '',
+    ])
+    return [header, ...lines].map((l) => l.map(csvCell).join(';')).join('\n')
+  }
   const header = ['aluno', 'matricula', ...(group ? ['equipe'] : []), 'status', ...questions.map((q) => q.id), 'total', 'alertas', 'ultima_atividade']
   const lines = rows.map((r) => [
     r.name,

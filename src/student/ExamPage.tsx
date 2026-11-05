@@ -668,7 +668,7 @@ function WaitStep() {
           }}
         >
           {clocking && <LoaderCircle size={18} className="spin" />}
-          Bater ponto e começar
+          {config.mode === 'group' ? 'Começar com a equipe' : 'Bater ponto e começar'}
         </Pill>
       </>
     )
@@ -764,7 +764,13 @@ function ExamRoom() {
   const statement = question && (
     <>
       <Statement question={question} reveal={!revealing && revealedId === question.id} landing={revealing?.id === question.id} />
-      {!s.questionOpen(question.id) && <div className="badge danger" style={{ margin: '0 1.125rem 0.75rem', alignSelf: 'flex-start' }}>Tempo esgotado</div>}
+      {s.handed.has(question.id) ? (
+        <div className="badge" style={{ margin: '0 1.125rem 0.75rem', alignSelf: 'flex-start' }}>
+          <Check size={12} /> Entregue
+        </div>
+      ) : (
+        !s.questionOpen(question.id) && <div className="badge danger" style={{ margin: '0 1.125rem 0.75rem', alignSelf: 'flex-start' }}>Tempo esgotado</div>
+      )}
       {s.config?.mode === 'group' && <GroupBar />}
     </>
   )
@@ -773,7 +779,8 @@ function ExamRoom() {
   const hand = async () => {
     setSending(true)
     try {
-      await s.finish()
+      if (manual && question) await s.handQuestion(question.id)
+      else await s.finish()
     } finally {
       setSending(false)
       setConfirming(false)
@@ -793,8 +800,8 @@ function ExamRoom() {
           <BuildVersion />
           <Clock questionId={question?.id} />
           {question && (
-            <Pill tone="brand" onClick={() => setConfirming(true)}>
-              <Send size={16} /> Entregar
+            <Pill tone="brand" disabled={manual && !s.questionOpen(question.id)} onClick={() => setConfirming(true)}>
+              <Send size={16} /> {manual ? 'Entregar questão' : 'Entregar'}
             </Pill>
           )}
         </header>
@@ -834,7 +841,7 @@ function ExamRoom() {
           )}
         </div>}
       </div>
-      <Modal open={confirming} title="Entregar a prova?" onClose={() => setConfirming(false)}>
+      <Modal open={confirming} title={`${manual ? 'Entregar esta questão' : 'Entregar a prova'}${s.config?.mode === 'group' ? ' pela equipe toda' : ''}?`} onClose={() => setConfirming(false)}>
         <div className="row" style={{ justifyContent: 'flex-end' }}>
           <Pill onClick={() => setConfirming(false)}>Continuar a prova</Pill>
           <Pill tone="brand" disabled={sending} onClick={() => void hand()}>

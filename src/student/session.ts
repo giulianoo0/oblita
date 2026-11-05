@@ -101,6 +101,8 @@ export class StudentSession extends Observable {
   screenError: 'denied' | 'not-monitor' | 'unsupported' | null = null
   warning: string | null = null
   team: TeamInfo | null = null
+  // Modo manual: questões que a equipe já entregou. Vêm do professor, que é quem decide.
+  handed = new Set<string>()
   teamError: string | null = null
   needsPassword = false
   teacherFp: string | null = null
@@ -211,7 +213,7 @@ export class StudentSession extends Observable {
   }
 
   questionOpen(questionId: string) {
-    return isOpen(this.config?.flow ?? 'free', this.saved?.clocks?.[questionId], this.serverNow())
+    return !this.handed.has(questionId) && isOpen(this.config?.flow ?? 'free', this.saved?.clocks?.[questionId], this.serverNow())
   }
 
   questionRemaining(questionId: string) {
@@ -536,6 +538,7 @@ export class StudentSession extends Observable {
     this.config = null
     this.phase = 'lobby'
     this.team = null
+    this.handed = new Set()
     this.resetDoc()
     this.setIdentity()
     this.memChunks.clear()
@@ -646,6 +649,9 @@ export class StudentSession extends Observable {
           // Cursor é descartável.
         }
         break
+      case 'handed':
+        if (Array.isArray(msg.questions)) this.handed = new Set(msg.questions.filter((q) => typeof q === 'string'))
+        break
       case 'countdown':
         if (Number.isFinite(msg.seconds) && msg.seconds > 0 && msg.seconds <= 10) this.countdownEnds = performance.now() + msg.seconds * 1000
         break
@@ -711,6 +717,7 @@ export class StudentSession extends Observable {
     this.followTeam(msg.team?.id)
     this.team = msg.team ?? null
     s.groupId = msg.team?.id
+    this.handed = new Set(Array.isArray(msg.handed) ? msg.handed.filter((q) => typeof q === 'string') : [])
     // Respostas que o professor já tem e que este computador perdeu voltam aqui.
     for (const [id, draft] of Object.entries(msg.drafts ?? {})) {
       const cur = s.answers[id]
@@ -1174,6 +1181,14 @@ export class StudentSession extends Observable {
     this.changed()
   }
 
+  // Modo manual: entrega só esta questão e continua na prova esperando as próximas.
+  async handQuestion(questionId: string) {
+    if (!this.questionOpen(questionId)) return
+    await this.submit(questionId)
+    this.handed = new Set([...this.handed, questionId])
+    this.changed()
+  }
+
   async finish(_forced = false) {
     const s = this.saved
     if (!s || s.finished) return
@@ -1247,6 +1262,7 @@ export class StudentSession extends Observable {
     this.welcomed = false
     this.resumed = false
     this.team = null
+    this.handed = new Set()
     this.teamError = null
     this.needsPassword = false
     this.teacherFp = null

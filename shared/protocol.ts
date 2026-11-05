@@ -150,7 +150,7 @@ export type StudentMsg =
 // Professor → aluno (sempre cifrado)
 export type TeacherMsg =
   | { t: 'refused'; reason: 'version' | 'ended' | 'identity' | 'full' }
-  | { t: 'welcome'; token?: string; config: StudentRoomConfig; phase: Phase; lastEvent: number; lastEventHash?: string; lastRec: number; team?: TeamInfo; drafts?: Record<string, { answer: Answer; rev: number }> }
+  | { t: 'welcome'; token?: string; config: StudentRoomConfig; phase: Phase; lastEvent: number; lastEventHash?: string; lastRec: number; team?: TeamInfo; drafts?: Record<string, { answer: Answer; rev: number }>; handed?: string[] }
   | TeacherMsgV2
   | { t: 'clock'; endsAt: number; now: number }
   | { t: 'phase'; phase: Phase }
@@ -166,6 +166,8 @@ export type TeacherMsg =
   | { t: 'y-aware' }
   | { t: 'beacon'; code: number }
   | { t: 'countdown'; seconds: number }
+  // Modo manual: as questões que a equipe (ou a pessoa) já entregou.
+  | { t: 'handed'; questions: string[] }
   | { t: 'test-result'; result: TestReport }
   | { t: 'run-result'; result: RunReport }
   | { t: 'time'; c: number; s: number }

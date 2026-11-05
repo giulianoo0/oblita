@@ -1,10 +1,10 @@
 import { ArrowDown, ArrowUp, Check, ChevronDown, Download, Loader2, PenLine, Search, X } from 'lucide-react'
 import { memo, startTransition, useCallback, useEffect, useRef, useState, type Dispatch, type KeyboardEvent, type SetStateAction } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { Pill, Popover, PopoverRow, useTick } from '../ui/kit'
+import { Pill, Popover, PopoverRow, Segmented, useTick } from '../ui/kit'
 import { download, safeName } from './exportZip'
 import type { Room } from './room'
-import { buildRows, EMPTY_QUERY, filterRows, isFiltering, nextSort, PRESENCE_LABEL, readQuery, rowsCsv, sortRows, writeQuery, type Cell, type Filter, type Presence, type RosterQuery, type RosterRow, type RosterState, type Sort } from './roster'
+import { buildRows, buildTeamRows, EMPTY_QUERY, filterRows, isFiltering, nextSort, PRESENCE_LABEL, readQuery, rowsCsv, sortRows, writeQuery, type Cell, type Filter, type Presence, type RosterQuery, type RosterRow, type RosterState, type Sort } from './roster'
 import { highlight, settleEcho } from './search'
 
 const URL_WRITE_MS = 250
@@ -12,6 +12,10 @@ const URL_WRITE_MS = 250
 export const FILTER_LABEL: Record<Filter, string> = { online: 'Online', offline: 'Offline', noscreen: 'Sem tela', alerts: 'Com alertas', empty: 'Sem resposta', graded: 'Com nota' }
 
 export const studentPath = (roomId: string, clientId: string) => `/sala/${encodeURIComponent(roomId)}/aluno/${encodeURIComponent(clientId)}`
+export const teamPath = (roomId: string, groupId: string) => `/sala/${encodeURIComponent(roomId)}/equipe/${encodeURIComponent(groupId)}`
+
+// As linhas da tabela como o professor escolheu ver: por aluno ou, em equipe, por equipe.
+export const rowsFor = (room: Room, byTeam: boolean, now: number) => (byTeam && room.config.mode === 'group' ? buildTeamRows(room, now) : buildRows(room, now))
 const points = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 2 })
 const fmt = (n: number) => points.format(n)
 
@@ -126,8 +130,9 @@ export function RosterBar({ room, rows, shown, state, setState, csv }: BarProps)
   const picked = questions.find((q) => q.id === query.question)
 
   const exportCsv = () => {
-    const visible = sortRows(filterRows(buildRows(room, Date.now()), query, ids), state.sort, ids)
-    download(new Blob(['﻿' + rowsCsv(visible, questions, room.config.mode) + '\n'], { type: 'text/csv;charset=utf-8' }), `${safeName(room.config.title)} notas.csv`)
+    const byTeam = state.byTeam && room.config.mode === 'group'
+    const visible = sortRows(filterRows(rowsFor(room, byTeam, Date.now()), query, ids), state.sort, ids)
+    download(new Blob(['﻿' + rowsCsv(visible, questions, room.config.mode, byTeam) + '\n'], { type: 'text/csv;charset=utf-8' }), `${safeName(room.config.title)} notas${byTeam ? ' por equipe' : ''}.csv`)
   }
 
   return (
@@ -167,6 +172,17 @@ export function RosterBar({ room, rows, shown, state, setState, csv }: BarProps)
         )}
       </div>
       <div className="grow" />
+      {csv && room.config.mode === 'group' && (
+        <Segmented
+          label="Agrupar notas"
+          value={state.byTeam ? 'team' : 'student'}
+          onChange={(v) => setState((s) => ({ ...s, byTeam: v === 'team' }))}
+          options={[
+            { value: 'student', label: 'Alunos' },
+            { value: 'team', label: 'Equipes' },
+          ]}
+        />
+      )}
       {isFiltering(query) && (
         <Pill size="sm" onClick={() => setState((s) => ({ ...s, query: EMPTY_QUERY }))}>
           Limpar
@@ -258,6 +274,7 @@ const Row = memo(
       <tr tabIndex={0} data-link onClick={open} onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), open())}>
         <th scope="row">
           <Marked text={row.name} query={text} />
+          {row.members !== undefined && <span className="badge num r-members">{row.members}</span>}
           {row.enrollment && (
             <small className="num">
               <Marked text={row.enrollment} query={text} />
@@ -303,25 +320,27 @@ interface TableProps {
   room: Room
   query: RosterQuery
   sort: Sort
+  byTeam: boolean
   setState: Dispatch<SetStateAction<RosterState>>
 }
 
 // Com tique próprio: a tabela não precisa refazer a cada miniatura que chega.
-export const ResultsTable = memo(function ResultsTable({ room, query, sort, setState }: TableProps) {
+export const ResultsTable = memo(function ResultsTable({ room, query, sort, byTeam: wantTeams, setState }: TableProps) {
   useTick(1000)
   const nav = useNavigate()
   const roomId = room.config.roomId
-  const onOpen = useCallback((id: string) => nav(studentPath(roomId, id)), [nav, roomId])
+  const byTeam = wantTeams && room.config.mode === 'group'
+  const onOpen = useCallback((id: string) => nav(byTeam && room.config.groups.some((g) => g.id === id) ? teamPath(roomId, id) : studentPath(roomId, id)), [nav, room, roomId, byTeam])
   const onSort = useCallback((k: string) => setState((s) => ({ ...s, sort: nextSort(s.sort, k) })), [setState])
   const onClear = useCallback(() => setState((s) => ({ ...s, query: EMPTY_QUERY })), [setState])
 
   const questions = room.exam.questions
   const ids = questions.map((q) => q.id)
-  const all = buildRows(room, Date.now())
+  const all = rowsFor(room, byTeam, Date.now())
   if (!all.length) return <Waiting />
   const rows = sortRows(filterRows(all, query, ids), sort, ids)
   if (!rows.length) return <NoMatch query={query} onClear={onClear} />
-  const group = room.config.mode === 'group'
+  const group = room.config.mode === 'group' && !byTeam
   const max = questions.reduce((n, q) => n + q.points, 0)
   const head = { sort, onSort }
   // Larguras fixas: filtrar ou alguém entregar não pode empurrar as colunas.
@@ -342,7 +361,7 @@ export const ResultsTable = memo(function ResultsTable({ room, query, sort, setS
         </colgroup>
         <thead>
           <tr>
-            <SortHead k="name" label="Aluno" {...head} />
+            <SortHead k="name" label={byTeam ? 'Equipe' : 'Aluno'} {...head} />
             {group && <SortHead k="team" label="Equipe" {...head} />}
             <SortHead k="presence" label="Status" {...head} />
             {questions.map((q) => (

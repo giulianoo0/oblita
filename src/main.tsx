@@ -14,6 +14,7 @@ import { SiteHeader, useSiteHeaderHidden } from './ui/SiteHeader'
 const NewRoom = lazy(() => import('./teacher/NewRoom'))
 const Dashboard = lazy(() => import('./teacher/Dashboard'))
 const StudentDetail = lazy(() => import('./teacher/StudentDetail'))
+const TeamDetail = lazy(() => import('./teacher/StudentDetail').then((m) => ({ default: m.TeamDetail })))
 const Exam = lazy(() => import('./student/ExamPage'))
 
 // Numa prova em andamento, uma tela quebrada não pode virar página em branco: os dados seguem no disco.
@@ -70,6 +71,7 @@ function Shell() {
               <Route path="/nova" element={<NewRoom />} />
               <Route path="/sala/:roomId" element={<Dashboard />} />
               <Route path="/sala/:roomId/aluno/:clientId" element={<StudentDetail />} />
+              <Route path="/sala/:roomId/equipe/:groupId" element={<TeamDetail />} />
               <Route path="/entrar" element={<Exam />} />
               <Route path="*" element={<Home />} />
             </Routes>

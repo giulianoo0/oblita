@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { Exam } from '../../shared/exam'
 import type { Student, Team } from './room'
-import { activityLabel, buildRows, filterRows, nextSort, readQuery, rowsCsv, sortRows, writeQuery, type RosterQuery, type RosterSource } from './roster'
+import { activityLabel, buildRows, buildTeamRows, filterRows, nextSort, readQuery, rowsCsv, sortRows, writeQuery, type RosterQuery, type RosterSource } from './roster'
 
 const exam: Exam = {
   version: 1,
@@ -196,23 +196,46 @@ describe('ordem', () => {
   })
 })
 
+describe('por equipe', () => {
+  test('uma linha por equipe, com a nota dela e alertas somados; sem equipe fica sozinho', () => {
+    const ana = student('a', 'Ana', { groupId: 'az', alerts: 2 })
+    const beto = student('b', 'Beto', { groupId: 'az', alerts: 1, online: false })
+    const caio = student('c', 'Caio')
+    const src = source([beto, ana, caio], 'group')
+    src.teamOf(ana).grades.q1 = { questionId: 'q1', status: 'done', points: 3, max: 4 }
+    const rows = buildTeamRows(src, NOW)
+    expect(rows.map((r) => r.name)).toEqual(['Equipe Azul', 'Caio'])
+    expect(rows[0]).toMatchObject({ id: 'az', enrollment: 'Ana, Beto', members: 2, presence: 'online', alerts: 3, total: 3, finished: false })
+    expect(rows[1].members).toBeUndefined()
+    expect(filterRows(rows, query({ text: 'beto' }), ['q1'])).toHaveLength(1)
+  })
+
+  test('entregue quando todos entregaram', () => {
+    const src = source([student('a', 'Ana', { groupId: 'az', finishedAt: NOW }), student('b', 'Beto', { groupId: 'az', finishedAt: NOW })], 'group')
+    expect(buildTeamRows(src, NOW)[0].finished).toBe(true)
+    expect(rowsCsv(buildTeamRows(src, NOW), exam.questions, 'group', true).split('\n')[1]).toContain('"Equipe Azul";"Ana, Beto"')
+  })
+})
+
 describe('URL', () => {
   test('ida e volta, sem perder outros parâmetros', () => {
     const params = writeQuery(new URLSearchParams('demo=100'), {
       query: query({ text: 'júlia', filters: ['online', 'alerts'], question: 'q1' }),
       sort: { key: 'q:q1', dir: 'desc' },
       view: 'results',
+      byTeam: true,
     })
     expect(params.get('demo')).toBe('100')
     expect(readQuery(params)).toEqual({
       query: { text: 'júlia', filters: ['online', 'alerts'], question: 'q1' },
       sort: { key: 'q:q1', dir: 'desc' },
       view: 'results',
+      byTeam: true,
     })
   })
 
   test('o padrão não aparece na URL', () => {
-    const params = writeQuery(new URLSearchParams('busca=x&filtro=online'), { query: query(), sort: { key: 'name', dir: 'asc' }, view: null })
+    const params = writeQuery(new URLSearchParams('busca=x&filtro=online'), { query: query(), sort: { key: 'name', dir: 'asc' }, view: null, byTeam: false })
     expect(params.toString()).toBe('')
   })
 
@@ -221,6 +244,7 @@ describe('URL', () => {
       query: { text: '', filters: ['online'], question: null },
       sort: { key: 'name', dir: 'asc' },
       view: null,
+      byTeam: false,
     })
   })
 })

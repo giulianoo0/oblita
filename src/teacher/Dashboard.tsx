@@ -14,7 +14,7 @@ import { openRoom, type AlertEntry, type Room, type Student } from './room'
 import { ReceiptCheck } from './ReceiptCheck'
 import { keepConnected } from './reconnect'
 import { buildRows, EMPTY_QUERY, filterRows, isFiltering, type RosterQuery } from './roster'
-import { Marked, NoMatch, ResultsTable, RosterBar, studentPath, useRosterState, Waiting } from './RosterView'
+import { Marked, NoMatch, ResultsTable, RosterBar, rowsFor, studentPath, teamPath, useRosterState, Waiting } from './RosterView'
 import { formatBytes } from './storageWatch'
 import './dash.css'
 
@@ -29,7 +29,7 @@ const settle = { type: 'spring', bounce: 0, duration: 0.36 } as const
 const PHASE_LABEL: Record<Phase, string> = { lobby: 'Sala aberta', running: 'Em prova', ended: 'Encerrada' }
 
 export const hhmmss = (at: number) => new Date(at).toLocaleTimeString('pt-BR')
-export { studentPath }
+export { studentPath, teamPath }
 
 // Só em desenvolvimento: ?demo=100 abre uma sala de mentira com esse número de alunos.
 const demoSize = () => {
@@ -286,6 +286,8 @@ function DashboardView({ room }: { room: Room }) {
   const query = useDeferredValue(typed)
   const ids = room.exam.questions.map((q) => q.id)
   const rows = buildRows(room, Date.now())
+  // A barra conta o que a tabela mostra: por equipe, as contagens são das equipes.
+  const barRows = view === 'results' ? rowsFor(room, roster.byTeam, Date.now()) : rows
   const filtering = isFiltering(query)
   const shown = filtering ? filterRows(rows, query, ids) : rows
   const visible = filtering ? new Set(shown.map((r) => r.id)) : null
@@ -340,9 +342,9 @@ function DashboardView({ room }: { room: Room }) {
 
       <div className="dash-body">
         <main className="dash-main">
-          {total > 0 && <RosterBar room={room} rows={rows} shown={shown.length} state={roster} setState={setRoster} csv={view === 'results'} />}
+          {total > 0 && <RosterBar room={room} rows={barRows} shown={view === 'results' ? (filtering ? filterRows(barRows, query, ids).length : barRows.length) : shown.length} state={roster} setState={setRoster} csv={view === 'results'} />}
           <div className="dash-scroll">
-            {view === 'wall' ? <Wall room={room} alarms={alarms} query={query} visible={visible} onClear={clear} /> : <ResultsTable room={room} query={query} sort={roster.sort} setState={setRoster} />}
+            {view === 'wall' ? <Wall room={room} alarms={alarms} query={query} visible={visible} onClear={clear} /> : <ResultsTable room={room} query={query} sort={roster.sort} byTeam={roster.byTeam} setState={setRoster} />}
           </div>
         </main>
         <aside className="dash-side">
@@ -666,9 +668,9 @@ function Wall({ room, alarms, query, visible, onClear }: WallProps) {
         return (
           <section key={g.id}>
             <div className="group-head">
-              <span className="team-name">
+              <Link className="team-name team-link" to={teamPath(room.config.roomId, g.id)} title="Ver a equipe">
                 <Marked text={g.name} query={query.text} />
-              </span>
+              </Link>
               <span className="team-code" title="Código privado da equipe">
                 {room.teamCode(g.id)}
               </span>

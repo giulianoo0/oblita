@@ -7,7 +7,7 @@ import type { Answer } from '../../shared/protocol'
 import { parseBody } from '../../shared/receipt'
 import { formatClock, useObservable } from '../lib/store'
 import { Avatar, Logo, Pill, Segmented, useTick } from '../ui/kit'
-import { MemberChips, RoomGate, RoomMissing, hhmmss, useRoom, useRoomRuntime } from './Dashboard'
+import { MemberChips, RoomGate, RoomMissing, hhmmss, studentPath, teamPath, useRoom, useRoomRuntime } from './Dashboard'
 import { alertLabel } from './exportZip'
 import Player from './Player'
 import type { Grade, Room, Student, Team, TestResult } from './room'
@@ -141,6 +141,129 @@ function Detail({ room, clientId }: { room: Room; clientId: string }) {
   )
 }
 
+// A equipe inteira numa tela: as telas dos integrantes lado a lado e o que a equipe entregou junta.
+export function TeamDetail() {
+  const { roomId = '', groupId = '' } = useParams()
+  const room = useRoom(roomId)
+  if (room === undefined) return null
+  if (!room) return <RoomMissing />
+  return (
+    <RoomGate room={room}>
+      <TeamView key={groupId} room={room} groupId={groupId} />
+    </RoomGate>
+  )
+}
+
+function TeamView({ room, groupId }: { room: Room; groupId: string }) {
+  useObservable(room)
+  useRoomRuntime(room)
+  const roomId = room.config.roomId
+  const back = `/sala/${encodeURIComponent(roomId)}`
+  const group = room.config.groups.find((g) => g.id === groupId)
+  const members = [...room.students.values()].filter((m) => m.groupId === groupId).sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
+  const ids = new Set(members.map((m) => m.clientId))
+  const alertCount = room.alerts.length
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const alerts = useMemo(() => room.alerts.filter((a) => ids.has(a.clientId)), [room, alertCount, [...ids].join()])
+  if (!group || !members.length) {
+    return (
+      <div className="center-screen">
+        <div className="gate">
+          <h1>Equipe não encontrada</h1>
+          <div>
+            <Link className="pill" to={back}>
+              Voltar à sala
+            </Link>
+          </div>
+        </div>
+      </div>
+    )
+  }
+  const team = room.teamOf(members[0])
+  const nameOf = new Map(members.map((m) => [m.clientId, m.name]))
+  return (
+    <div>
+      <header className="dash-top">
+        <Link className="pill icon" to={back} aria-label="Voltar à sala">
+          <ArrowLeft size={16} />
+        </Link>
+        <Logo size={1.25} />
+        <span className="dash-title">{group.name}</span>
+        <StudentClock room={room} student={members[0]} />
+        {!room.bus && (
+          <Link className="badge danger" to={back}>
+            Sala sem conexão
+          </Link>
+        )}
+      </header>
+      <div className="detail-page detail">
+        <div className="detail-left team-screens">
+          {members.map((m) => {
+            const frame = room.liveFrame.get(m.clientId) ?? room.thumbs.get(m.clientId)
+            return (
+              <Link key={m.clientId} className="player team-screen" to={studentPath(roomId, m.clientId)}>
+                {frame ? <img src={frame} alt="" draggable={false} /> : <Avatar name={m.name} />}
+                <span className="tile-tag">
+                  <i className={`dot${m.online ? ' on' : ''}`} />
+                  <span>{m.name}</span>
+                  {m.finishedAt && <Check size={12} />}
+                </span>
+              </Link>
+            )
+          })}
+        </div>
+        <div className="detail-right">
+          <div className="card">
+            <div className="row">
+              <div className="who grow">
+                <b>{group.name}</b>
+              </div>
+              <span className="team-code" title="Código privado da equipe">
+                {room.teamCode(group.id)}
+              </span>
+            </div>
+            <div className="status-list">
+              {team.closed ? (
+                <span className="badge">
+                  <Check size={12} /> Entregue
+                </span>
+              ) : (
+                <span className="badge num">
+                  {members.filter((m) => m.online).length}/{members.length} online
+                </span>
+              )}
+            </div>
+            <MemberChips room={room} members={members} />
+          </div>
+          {room.exam.questions.map((q) => (
+            <QuestionCard key={q.id} room={room} team={team} question={q} />
+          ))}
+          <div className="card">
+            <div className="row">
+              <h2 className="grow">Alertas</h2>
+              {alerts.length > 0 && <span className="badge num">{alerts.length}</span>}
+            </div>
+            {alerts.length > 0 && (
+              <div className="alert-list">
+                {alerts.slice(0, ALERT_LIMIT).map((a, i) => (
+                  <Link key={`${a.id}:${alerts.length - i}`} className={`alert-line${a.severe ? ' severe' : ''}`} to={`${studentPath(roomId, a.clientId)}?t=${a.at}`}>
+                    <time className="xs faint num">{hhmmss(a.at)}</time>
+                    <span className="kind">{alertLabel(a.kind)}</span>
+                    <span className="about">
+                      {nameOf.get(a.clientId)}
+                      {a.detail ? ` · ${a.detail}` : ''}
+                    </span>
+                  </Link>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function StudentClock({ room, student }: { room: Room; student: Student }) {
   useTick(500)
   if (room.phase !== 'running') return null
@@ -170,7 +293,17 @@ function Identity({ room, student: s }: { room: Room; student: Student }) {
         <div className="who grow">
           <b>{s.name}</b>
           {s.enrollment && <span className="small muted">{s.enrollment}</span>}
-          {inTeams && <div className="small muted">{group?.name ?? 'Sem equipe'}</div>}
+          {inTeams && (
+            <div className="small muted">
+              {group ? (
+                <Link className="team-link" to={teamPath(room.config.roomId, group.id)}>
+                  {group.name}
+                </Link>
+              ) : (
+                'Sem equipe'
+              )}
+            </div>
+          )}
         </div>
       </div>
       <div className="status-list">

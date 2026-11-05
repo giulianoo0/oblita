@@ -155,6 +155,8 @@ export interface Team {
   clockInAt?: number
   endsAt?: number
   closed?: boolean
+  // Modo manual: questões que a equipe já entregou. Ficam fechadas só para ela, com a versão da entrega.
+  handed?: string[]
   doc?: string
   answers: Record<string, { answer: Answer; rev: number }>
   submissions: Record<string, { answer: Answer; at: number; by: string }>
@@ -715,22 +717,30 @@ export class Room extends Observable {
         this.onEvent(s, msg.event)
         break
       case 'draft':
-        if (this.validAnswer(msg.questionId, msg.answer) && this.questionOpen(msg.questionId)) this.onDraft(s, msg.questionId, msg.answer, msg.rev)
+        if (this.validAnswer(msg.questionId, msg.answer) && this.questionOpenFor(s, msg.questionId)) this.onDraft(s, msg.questionId, msg.answer, msg.rev)
         break
       case 'submit':
         // O número entra mesmo se a resposta for lixo, senão o fluxo do aluno trava aqui.
-        if (this.accept(s, msg.seq) && this.validAnswer(msg.questionId, msg.answer) && this.questionOpen(msg.questionId)) {
+        if (this.accept(s, msg.seq) && this.validAnswer(msg.questionId, msg.answer) && this.questionOpenFor(s, msg.questionId)) {
           const team = this.teamOf(s)
           // O código vem do documento da equipe, que já está em ordem neste mesmo canal.
           const answer = msg.answer.type === 'code' ? (this.docOf(team).snapshot(msg.questionId) ?? msg.answer) : msg.answer
           team.submissions[msg.questionId] = { answer, at: Date.now(), by: s.name }
           this.enqueueGrade(team, msg.questionId)
+          // No manual, entregar é por questão e vale para a equipe toda: ela sai da edição de todos.
+          if (this.flow === 'manual') {
+            team.handed = [...new Set([...(team.handed ?? []), msg.questionId])]
+            for (const m of this.membersOf(s)) this.sendToStudent(m, { t: 'handed', questions: team.handed })
+            this.deliverReceipt(s)
+          }
           this.touch()
         }
         break
       case 'finish':
         if (this.accept(s, msg.seq)) {
-          s.finishedAt = Date.now()
+          s.finishedAt ??= Date.now()
+          // Em equipe a entrega é de todos: quem entrega encerra a prova dos colegas junto.
+          if (this.config.mode === 'group' && s.groupId) this.finishTeam(s)
           this.touch()
           this.deliverReceipt(s)
         }
@@ -873,6 +883,7 @@ export class Room extends Observable {
       lastRec: s.lastRec,
       team: this.teamInfo(s.groupId),
       drafts: this.phase === 'lobby' ? undefined : nonCodeAnswers(team),
+      handed: team.handed,
     })
     this.broadcastGroup(s.groupId)
     if (s.examGranted && (s.finishedAt || team.closed)) this.deliverReceipt(s)
@@ -916,6 +927,11 @@ export class Room extends Observable {
     return isOpen(this.flow, this.clocks[questionId], Date.now())
   }
 
+  // Aberta para esta pessoa: no manual, a questão que a equipe entregou fecha só para ela.
+  questionOpenFor(s: Student, questionId: string) {
+    return this.questionOpen(questionId) && !this.teamOf(s).handed?.includes(questionId)
+  }
+
   // O horário de fim de cada um. No clock-in é por pessoa ou grupo; o do grupo vale para todos.
   // No manual não existe: acaba quando o professor encerra.
   endsAtOf(s: Student) {
@@ -932,8 +948,19 @@ export class Room extends Observable {
       team.clockInAt = Date.now()
       team.endsAt = team.clockInAt + this.exam.durationMin * 60_000
     }
-    this.maybeSendExam(s)
+    // O ponto de um começa a equipe toda: quem já está pronto recebe a prova no mesmo instante.
+    for (const m of this.membersOf(s)) this.maybeSendExam(m)
     this.touch()
+  }
+
+  private membersOf(s: Student) {
+    return this.config.mode === 'group' && s.groupId ? this.groupMembers(s.groupId) : [s]
+  }
+
+  private finishTeam(s: Student) {
+    const team = this.teamOf(s)
+    for (const m of this.membersOf(s)) m.finishedAt ??= s.finishedAt
+    this.closeTeam(team)
   }
 
   // A prova só sai para quem já está sob vigilância. Quem não está pronto segue esperando.
@@ -1040,7 +1067,7 @@ export class Room extends Observable {
         console.error('falha ao extrair respostas', team.key, err)
       }
       const draft = team.answers[questionId]
-      if (!draft) continue
+      if (!draft || team.handed?.includes(questionId)) continue
       team.submissions[questionId] = { answer: draft.answer, at: Date.now(), by: team.submissions[questionId]?.by ?? 'rascunho' }
       this.enqueueGrade(team, questionId)
     }
@@ -1058,7 +1085,11 @@ export class Room extends Observable {
     for (const [questionId, draft] of Object.entries(team.answers)) {
       // O código vale como está no fim: quem entregou antes não congela o que os colegas fizeram depois.
       // A exceção é a questão fechada no modo manual, que já tem a versão congelada dela.
-      if (!team.submissions[questionId] || (draft.answer.type === 'code' && !this.clocks[questionId]?.closed)) {
+      const sub = team.submissions[questionId]
+      if (team.handed?.includes(questionId)) continue
+      // Quem acabou de entregar já mandou este mesmo código: corrigir de novo só gastaria a fila.
+      if (sub && JSON.stringify(sub.answer) === JSON.stringify(draft.answer)) continue
+      if (!sub || (draft.answer.type === 'code' && !this.clocks[questionId]?.closed)) {
         team.submissions[questionId] = { answer: draft.answer, at: Date.now(), by: team.submissions[questionId]?.by ?? 'rascunho' }
         this.enqueueGrade(team, questionId)
       }
@@ -1870,7 +1901,7 @@ export class Room extends Observable {
     // Recusas daqui até a fila não gastam o minuto, e sempre respondem: senão o botão ficaria preso.
     const source = msg.t === 'test' ? msg.files : null
     if (!q.languages.includes(msg.lang) || (!wasm && !validFiles(source))) return report({ reqId, questionId, status: 'compile-error', log: 'Arquivos fora do limite', nextInMs: 0 })
-    if (!this.questionOpen(questionId)) return report({ reqId, questionId, status: 'compile-error', log: 'Esta questão está fechada', nextInMs: 0 })
+    if (!this.questionOpenFor(s, questionId)) return report({ reqId, questionId, status: 'compile-error', log: 'Esta questão está fechada', nextInMs: 0 })
     const key = this.teamKey(s)
     if (this.jobs.position(key) !== null) return report({ reqId, questionId, status: 'busy' })
     const wait = (this.lastTest.get(key) ?? 0) + TEST_INTERVAL_MS - Date.now()
