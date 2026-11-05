@@ -24,7 +24,11 @@ import { defaultStarter, studentSession as session } from './session'
 
 // O Dia reveal do título dura 1500 ms; um respiro, e ele voa para o lugar dele no enunciado.
 const TITLE_HOLD_MS = 1750
-const MORPH_MS = 650
+const MORPH_MS = 700
+// Nos últimos quadros o título que voa some e o do enunciado aparece no lugar: os dois têm
+// espaçamento e entrelinha diferentes, e a troca seca daria um pulo no pouso.
+const LAND_FADE_MS = 140
+const ARRIVAL_GRACE_MS = 4000
 
 const CONNECT_ERROR: Record<ConnectError, string> = {
   'bad-address': 'Esse endereço não é válido. Confira o IP que o professor mostrou.',
@@ -739,6 +743,7 @@ function ExamRoom() {
   // A revelação fica guardada por questão: o enunciado só varre uma vez, e ao chegar.
   const [revealing, setRevealing] = useState<Question | null>(null)
   const [revealedId, setRevealedId] = useState<string | null>(null)
+  const [landed, setLanded] = useState<string | null>(null)
   const seen = useRef(new Set(exam.questions.map((q) => q.id)))
   useEffect(() => {
     if (!manual) return
@@ -763,7 +768,7 @@ function ExamRoom() {
 
   const statement = question && (
     <>
-      <Statement question={question} reveal={!revealing && revealedId === question.id} landing={revealing?.id === question.id} />
+      <Statement question={question} reveal={!revealing && revealedId === question.id} landing={revealing?.id === question.id && landed !== question.id} />
       {s.handed.has(question.id) ? (
         <div className="badge" style={{ margin: '0 1.125rem 0.75rem', alignSelf: 'flex-start' }}>
           <Check size={12} /> Entregue
@@ -851,7 +856,7 @@ function ExamRoom() {
         </div>
       </Modal>
       <ExamNotices />
-      {manual && <RevealOverlay question={revealing} onDone={() => setRevealing(null)} />}
+      {manual && <RevealOverlay question={revealing} onLand={() => setLanded(revealing?.id ?? null)} onDone={() => (setRevealing(null), setLanded(null))} />}
       {locked && <LockOverlay />}
       {/* Fora de .exam: ela some enquanto a prova está bloqueada, e o selo precisa continuar na tela. */}
       <Beacon code={s.beaconCode} />
@@ -860,7 +865,7 @@ function ExamRoom() {
 }
 
 // Quem está de fora da contagem (chegou depois) não vê nada disto: a questão só aparece.
-function RevealOverlay({ question, onDone }: { question: Question | null; onDone: () => void }) {
+function RevealOverlay({ question, onLand, onDone }: { question: Question | null; onLand: () => void; onDone: () => void }) {
   useTick(100)
   const left = Math.ceil((session.countdownEnds - performance.now()) / 1000)
   if (left > 0) {
@@ -870,8 +875,9 @@ function RevealOverlay({ question, onDone }: { question: Question | null; onDone
       </div>
     )
   }
-  if (!question) return null
-  return <RevealTitle key={question.id} question={question} onDone={onDone} />
+  // A questão chega pela rede logo depois do zero: até lá o fundo fica, senão a tela de espera pisca no meio.
+  if (!question) return performance.now() - session.countdownEnds < ARRIVAL_GRACE_MS ? <div className="reveal-overlay steady" aria-hidden="true" /> : null
+  return <RevealTitle key={question.id} question={question} onLand={onLand} onDone={onDone} />
 }
 
 // O mesmo dígito da tela de manutenção do juntos: o novo sobe de baixo com mola, o velho sai para cima.
@@ -891,28 +897,42 @@ function RollingDigit({ value }: { value: string }) {
 }
 
 // O título nasce grande no centro com o Dia reveal e, ao terminar, voa e encolhe até o título do enunciado.
-function RevealTitle({ question, onDone }: { question: Question; onDone: () => void }) {
+function RevealTitle({ question, onLand, onDone }: { question: Question; onLand: () => void; onDone: () => void }) {
   const title = useRef<HTMLHeadingElement>(null)
   const [morph, setMorph] = useState<{ x: number; y: number; scale: number } | null>(null)
+  const [landing, setLanding] = useState(false)
   const done = useRef(onDone)
   done.current = onDone
+  const land = useRef(onLand)
+  land.current = onLand
   useEffect(() => {
-    const hold = setTimeout(() => {
-      const from = title.current?.getBoundingClientRect()
-      const to = document.querySelector('.exam-statement h2')?.getBoundingClientRect()
-      if (!from || !to || !from.width) return done.current()
-      const fromSize = parseFloat(getComputedStyle(title.current!).fontSize)
-      const toSize = parseFloat(getComputedStyle(document.querySelector('.exam-statement h2')!).fontSize)
-      setMorph({ x: to.left - from.left, y: to.top - from.top, scale: toSize / fromSize })
-    }, TITLE_HOLD_MS)
-    const end = setTimeout(() => done.current(), TITLE_HOLD_MS + MORPH_MS)
-    return () => {
-      clearTimeout(hold)
-      clearTimeout(end)
-    }
+    const timers: number[] = []
+    timers.push(
+      window.setTimeout(() => {
+        const target = document.querySelector<HTMLElement>('.exam-statement h2')
+        const from = title.current?.getBoundingClientRect()
+        const to = target?.getBoundingClientRect()
+        if (!from || !to || !from.width || !target) return done.current()
+        const a = getComputedStyle(title.current!)
+        const b = getComputedStyle(target)
+        const scale = parseFloat(b.fontSize) / parseFloat(a.fontSize)
+        // Alinha o topo das letras, não o da caixa: as entrelinhas são diferentes.
+        const lead = (st: CSSStyleDeclaration) => (parseFloat(st.lineHeight) - parseFloat(st.fontSize)) / 2 || 0
+        setMorph({ x: to.left - from.left, y: to.top + lead(b) - from.top - lead(a) * scale, scale })
+        timers.push(
+          window.setTimeout(() => {
+            setLanding(true)
+            land.current()
+          }, MORPH_MS - LAND_FADE_MS),
+          window.setTimeout(() => done.current(), MORPH_MS),
+        )
+      }, TITLE_HOLD_MS),
+    )
+    return () => timers.forEach(clearTimeout)
   }, [])
   return (
-    <div className={`reveal-overlay${morph ? ' leaving' : ''}`}>
+    // Continua o fundo da contagem: entrar de novo com fade deixaria a prova aparecer por um instante.
+    <div className={`reveal-overlay steady${morph ? ' leaving' : ''}${landing ? ' landing' : ''}`}>
       <h1
         ref={title}
         className="reveal-title"
@@ -928,7 +948,9 @@ function RevealTitle({ question, onDone }: { question: Question; onDone: () => v
 function Statement({ question, reveal, landing }: { question: Question; reveal?: boolean; landing?: boolean }) {
   return (
     <div className="exam-statement" role="tabpanel">
-      <h2 style={landing ? { visibility: 'hidden' } : undefined}>{question.title}</h2>
+      <h2 className="statement-title" data-landing={landing || undefined}>
+        {question.title}
+      </h2>
       <div className="small muted">{question.points === 1 ? '1 ponto' : `${question.points} pontos`}</div>
       <Markdown key={`${question.id}-${reveal ? 'r' : 'n'}`} text={question.statement} reveal={reveal} />
       {question.type === 'code' &&

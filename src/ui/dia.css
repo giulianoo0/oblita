@@ -79,11 +79,12 @@
   animation: settle-in var(--dur-base) var(--ease-out);
 }
 /* Curvas da tela de manutenção do juntos (as mesmas do lawcore): mola com leve passada para entrar,
-   amortecida para sair, e a da metamorfose, que passa uns 12% e volta. */
+   amortecida para sair. */
 .reveal-overlay {
   --spring-pop: linear(0, 0.058, 0.191, 0.352, 0.513, 0.656, 0.774, 0.865, 0.932, 0.977, 1.005, 1.021, 1.027, 1.028, 1.026, 1.022, 1.017, 1.013, 1.009, 1.006, 1.003, 1.001, 1, 1, 1);
   --spring-settle: linear(0, 0.073, 0.222, 0.382, 0.527, 0.648, 0.742, 0.814, 0.868, 0.907, 0.935, 0.955, 0.969, 0.978, 0.985, 0.99, 1);
-  --spring-morph: linear(0, 0.041, 0.145, 0.286, 0.443, 0.598, 0.741, 0.863, 0.961, 1.035, 1.084, 1.114, 1.125, 1.124, 1.114, 1.097, 1.078, 1.058, 1.039, 1.023, 1.009, 0.999, 0.991, 0.987, 0.985, 0.984, 0.985, 0.987, 0.989, 0.992, 0.994, 0.996, 1);
+  /* A metamorfose sai do repouso e pousa no repouso, sem passar do ponto: ease-in-out forte. */
+  --ease-morph: cubic-bezier(0.77, 0, 0.175, 1);
   transition: background-color 450ms var(--ease-out);
 }
 .roll-digit {
@@ -121,8 +122,12 @@
   line-height: 1.05;
   letter-spacing: -0.03em;
   transform-origin: 0 0;
-  transition: transform 650ms var(--spring-morph);
+  transition: transform 700ms var(--ease-morph), opacity 140ms linear;
 }
+.reveal-overlay.landing .reveal-title { opacity: 0; }
+.statement-title { transition: opacity 140ms linear; }
+.statement-title[data-landing] { opacity: 0; transition: none; }
+.reveal-overlay.steady { animation: none; }
 /* Voando para o enunciado: o fundo some e deixa ver a prova chegando por baixo. */
 .reveal-overlay.leaving {
   background: transparent;
@@ -132,7 +137,7 @@
 @media (prefers-reduced-motion: reduce) {
   .roll-digit > .in, .roll-digit > .out { animation: none; }
   .roll-digit > .out { display: none; }
-  .reveal-title { transition: none; }
+  .reveal-title { transition: opacity 140ms linear; }
   .dia-reveal {
     animation: none;
     background-image: none;

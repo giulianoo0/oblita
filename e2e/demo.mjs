@@ -2,6 +2,7 @@
 // juntos e entregam. Tudo pelo fluxo real (site, hub e navegador), gravado por screencast e montado com ffmpeg.
 // Uso (Windows): set BROWSER=C:\...\chrome.exe && node e2e/demo.mjs [--no-build] [--out=pasta]
 //                node e2e/demo.mjs --compose=pasta   (só remonta o vídeo a partir dos quadros já gravados)
+//                node e2e/demo.mjs --manual          (o professor libera questão por questão)
 import { spawnSync } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFile, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -17,7 +18,8 @@ const argv = process.argv.slice(2)
 const opt = (name) => argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3)
 const NO_BUILD = argv.includes('--no-build')
 const COMPOSE_ONLY = opt('compose')
-const OUT = resolve(COMPOSE_ONLY ?? opt('out') ?? join(tmpdir(), 'oblita-demo'))
+const MANUAL = argv.includes('--manual')
+const OUT = resolve(COMPOSE_ONLY ?? opt('out') ?? join(tmpdir(), MANUAL ? 'oblita-demo-manual' : 'oblita-demo'))
 const FRAMES = join(OUT, 'frames')
 const BLOCK = ['*www.gstatic.com*', '*1.1.1.1*', '*oblita.giuli.dev*']
 const TEAM = 'Equipe Alfa'
@@ -352,6 +354,17 @@ async function openTab(person, key) {
   return t
 }
 
+// Modo manual: o professor libera a questão i no painel; a contagem e a revelação aparecem nos alunos.
+async function release(i) {
+  const item = `document.querySelectorAll('.manual-item')[${i}]`
+  await hT.hover(item, `questão ${i + 1}`)
+  await sleep(500)
+  await hT.clickText('Liberar', { within: item })
+  mark('clique', 'T')
+  // A contagem começa já: a cena troca para os alunos sem esperar.
+  await sleep(350)
+}
+
 async function record() {
   rmSync(OUT, { recursive: true, force: true })
   mkdirSync(FRAMES, { recursive: true })
@@ -437,6 +450,10 @@ async function record() {
     await sleep(250)
   }
   await sleep(600)
+  if (MANUAL) {
+    await hT.clickText('Manual')
+    await sleep(700)
+  }
   await hT.clickText('Criar sala')
   await T.waitFor(`location.pathname.startsWith('/sala/')`, { timeout: 30000 })
   const connected = `[...document.querySelectorAll('.conn h2')].some((h) => h.textContent === 'Programa')`
@@ -484,28 +501,32 @@ async function record() {
   await sleep(1100)
 
   // ---- 4. O professor abre a prova
-  scene(['T'], 'Professor abre a prova')
+  scene(['T'], MANUAL ? 'Professor começa e libera a primeira questão' : 'Professor abre a prova')
   await T.waitFor(`[...document.querySelectorAll('.dash-main section')].some((s) => s.querySelector('.team-name')?.textContent === ${JSON.stringify(TEAM)} && s.querySelectorAll('.member').length === 2)`)
   await sleep(1200)
-  await hT.clickText('Abrir prova')
+  await hT.clickText(MANUAL ? 'Começar' : 'Abrir prova')
   await T.waitText('Em prova')
   await sleep(1100)
+  if (MANUAL) await release(0)
 
   // ---- 5. Ana | Bruno: a prova, juntos
   scene(['A', 'B'], 'Ana e Bruno fazem a prova juntos e entregam')
-  await A.waitText('Bater ponto e começar', { timeout: 15000 })
-  await sleep(500)
-  await Promise.all([
-    hA.clickText('Bater ponto e começar'),
-    (async () => {
-      // Pronto antes da prova abrir, Bruno também bate o ponto; quem chega depois recebe direto.
-      await sleep(1100)
-      if (await B.ev(`!!(${B.byText('Bater ponto e começar')})`)) await hB.clickText('Bater ponto e começar')
-    })(),
-  ])
+  if (!MANUAL) {
+    await A.waitText('Bater ponto e começar', { timeout: 15000 })
+    await sleep(500)
+    await Promise.all([
+      hA.clickText('Bater ponto e começar'),
+      (async () => {
+        // Pronto antes da prova abrir, Bruno também bate o ponto; quem chega depois recebe direto.
+        await sleep(1100)
+        if (await B.ev(`!!(${B.byText('Bater ponto e começar')})`)) await hB.clickText('Bater ponto e começar')
+      })(),
+    ])
+  }
   for (const t of [A, B]) await t.waitFor(`!!document.querySelector('.editor-mount .view-line') && ${EDITOR_TEXT}.includes('int main')`, { timeout: 20000 })
   // O título da questão se revela e voa para o enunciado.
-  await sleep(2600)
+  if (MANUAL) await A.waitFor(`!document.querySelector('.reveal-overlay')`, { timeout: 15000, every: 100 })
+  await sleep(MANUAL ? 900 : 2600)
   const seed = await A.ev(EDITOR_TEXT)
   const blank = seed.split('\n').findIndex((l, i, all) => i > 0 && all[i - 1].includes('int main') && !l.trim())
   if (blank < 0) throw new Error(`semente inesperada:\n${seed}`)
@@ -585,24 +606,54 @@ async function record() {
   await sleep(2100)
 
   // ---- 6. Entregam
-  const deliver = async (h, t) => {
-    await h.clickText('Entregar')
-    await t.waitText('Entregar a prova?')
-    mark('modal-abre', h.key)
+  if (MANUAL) {
+    // A Ana entrega a questão pela equipe; ela fecha para os dois, e a prova continua.
+    await hA.clickText('Entregar questão')
+    await A.waitText('Entregar esta questão pela equipe toda?')
+    mark('modal-abre', 'A')
     await sleep(700)
-    await h.clickText('Entregar', { within: `document.querySelector('.modal')` })
-    mark('modal-fecha', h.key)
-    await t.waitText('Prova entregue', { timeout: 60000 })
-    mark('entregou', h.key)
+    await hA.clickText('Entregar', { within: `document.querySelector('.modal')` })
+    mark('modal-fecha', 'A')
+    for (const t of [A, B]) await t.waitFor(`[...document.querySelectorAll('.badge')].some((b) => b.textContent.trim() === 'Entregue')`, { timeout: 20000 })
+    mark('entregou', 'A')
+    await sleep(1800)
+
+    scene(['T'], 'Professor libera a segunda questão')
+    await sleep(700)
+    await release(1)
+
+    scene(['A', 'B'], 'A segunda questão chega e o Bruno entrega')
+    await A.waitFor(`!!document.querySelector('.reveal-overlay')`, { timeout: 10000, every: 100 }).catch(() => {})
+    for (const t of [A, B]) await t.waitFor(`!document.querySelector('.reveal-overlay') && [...document.querySelectorAll('.option')].length === 2`, { timeout: 20000, every: 100 })
+    await sleep(900)
+    await hB.clickText('Logarítmica')
+    await A.waitFor(`document.querySelector('.option[aria-checked="true"]')?.textContent.includes('Logarítmica')`, { timeout: 10000 })
+    await sleep(1200)
+    await hB.clickText('Entregar questão')
+    await B.waitText('Entregar esta questão pela equipe toda?')
+    mark('modal-abre', 'B')
+    await sleep(700)
+    await hB.clickText('Entregar', { within: `document.querySelector('.modal')` })
+    mark('modal-fecha', 'B')
+    for (const t of [A, B]) await t.waitFor(`[...document.querySelectorAll('.badge')].some((b) => b.textContent.trim() === 'Entregue')`, { timeout: 20000 })
+    mark('entregou', 'B')
+    await sleep(1600)
+  } else {
+    const deliver = async (h, t) => {
+      await h.clickText('Entregar')
+      await t.waitText('Entregar a prova pela equipe toda?')
+      mark('modal-abre', h.key)
+      await sleep(700)
+      await h.clickText('Entregar', { within: `document.querySelector('.modal')` })
+      mark('modal-fecha', h.key)
+      await t.waitText('Prova entregue', { timeout: 60000 })
+      mark('entregou', h.key)
+    }
+    // Em equipe, quem entrega encerra os dois.
+    await deliver(hA, A)
+    await B.waitText('Prova entregue', { timeout: 60000 })
+    await sleep(1300)
   }
-  await Promise.all([
-    deliver(hA, A),
-    (async () => {
-      await sleep(1000)
-      await deliver(hB, B)
-    })(),
-  ])
-  await sleep(1300)
 
   // ---- 7. O professor encerra e vê as notas
   scene(['T'], 'Professor encerra e vê as notas')
@@ -621,8 +672,22 @@ async function record() {
   await sleep(600)
   const row = `[...document.querySelectorAll('table.results tbody tr')].find((r) => r.textContent.includes(${JSON.stringify(TEAM)}))`
   log(`notas: ${JSON.stringify(await T.ev(`[...${row}.querySelectorAll('td')].map((e) => e.textContent.trim())`))}`)
-  await hT.hover(row, 'linha da equipe')
-  await sleep(2400)
+  if (MANUAL) {
+    // As notas por equipe, e a página da equipe com as duas telas.
+    await sleep(800)
+    await hT.clickText('Equipes')
+    await T.waitFor(`!!document.querySelector('.results .r-members')`, { timeout: 8000 })
+    await sleep(1200)
+    await hT.click(row, 'linha da equipe')
+    mark('transicao', 'T')
+    await T.waitFor(`location.pathname.includes('/equipe/')`, { timeout: 8000 })
+    await sleep(1000)
+    await hT.hover(`document.querySelector('.team-screens')`, 'telas da equipe')
+    await sleep(2600)
+  } else {
+    await hT.hover(row, 'linha da equipe')
+    await sleep(2400)
+  }
   scene(null)
 
   clearInterval(feeder)
