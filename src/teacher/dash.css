@@ -182,3 +182,5 @@ mark { padding: 0 0.0625rem; margin: 0 -0.0625rem; border-radius: 0.1875rem; bac
 .manual-item[data-open='true'] { background: color-mix(in oklab, var(--primary) 14%, transparent); }
 .manual-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .manual-minutes { width: 4.5rem; height: 2rem; padding: 0 0.625rem; font-size: var(--text-sm); }
+.conn-alt { align-self: flex-start; padding: 0.25rem 0; border: 0; background: none; color: var(--text-muted); cursor: pointer; border-radius: var(--radius-sm); }
+.conn-alt:hover { color: inherit; text-decoration: underline; text-underline-offset: 0.2em; }

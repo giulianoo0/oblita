@@ -513,7 +513,7 @@ function ConnectionCard({ room }: { room: Room }) {
       <div className="card conn">
         <div className="row">
           <i className="dot on" />
-          <h2 className="grow">Programa</h2>
+          <h2 className="grow">Local</h2>
           {lock}
         </div>
         {room.hubAddresses.length ? (
@@ -558,7 +558,7 @@ function ConnectionCard({ room }: { room: Room }) {
         </div>
         <TeacherCode room={room} />
         {state === 'relay' ? (
-          <span className="small muted">Os alunos entram de qualquer rede pelo código, em {location.host}.</span>
+          <span className="small muted">Os alunos abrem {location.host}, escolhem Código da sala e digitam o código acima. Funciona de qualquer rede, com internet.</span>
         ) : (
           <div className="errbox">Sem conexão com a sala online. Tentando de novo; o trabalho dos alunos segue salvo neles.</div>
         )}
@@ -574,7 +574,7 @@ function ConnectionCard({ room }: { room: Room }) {
       <div className="card conn">
         <div className="row">
           <i className="dot on" />
-          <h2 className="grow">Só navegador</h2>
+          <h2 className="grow">Local, sem o programa</h2>
           {lock}
         </div>
         <div className="stack" style={{ gap: 0 }}>
@@ -587,48 +587,60 @@ function ConnectionCard({ room }: { room: Room }) {
     )
   }
 
+  const place = mode === 'relay' ? 'online' : 'local'
   return (
     <div className="card conn">
       <div className="row wrap">
         <h2 className="grow">Conexão</h2>
         {!hosted && (
           <Segmented
-            value={mode}
-            onChange={setMode}
+            value={place}
+            onChange={(next) => setMode(next === 'online' ? 'relay' : 'hub')}
             options={[
-              { value: 'hub', label: 'Programa' },
-              { value: 'relay', label: 'Online' },
-              { value: 'rtc', label: 'Só navegador' },
+              { value: 'local', label: 'Local' },
+              { value: 'online', label: 'Online' },
             ]}
           />
         )}
       </div>
-      <TeacherCode room={room} />
-      {state === 'down' && room.students.size > 0 && <div className="errbox">Conexão caiu. O trabalho dos alunos segue salvo neles.</div>}
-      {failed && <div className="errbox">{mode === 'hub' ? 'O programa recusou o painel.' : 'Sem internet para abrir o código.'}</div>}
-      {mode === 'relay' && (
+      {place === 'local' ? (
         <span className="small muted">
-          {onlineBlocked ? 'Esta sala exige internet bloqueada nos alunos, então não pode ser online.' : 'Alunos em qualquer rede entram pelo código. Todos precisam de internet durante a prova.'}
+          Prova presencial, todos na mesma rede. Os dados ficam no seu computador e a internet dos alunos pode ser cortada durante a prova.
+        </span>
+      ) : (
+        <span className="small muted">
+          {onlineBlocked
+            ? 'Esta sala exige a internet dos alunos bloqueada, então não pode ser online. Crie a sala sem rede isolada para usar este modo.'
+            : 'Alunos em qualquer lugar, cada um na sua rede. Todos precisam de internet durante a prova inteira. Tudo passa cifrado pelo site, e só você lê.'}
         </span>
       )}
+      <TeacherCode room={room} />
+      {state === 'down' && room.students.size > 0 && <div className="errbox">Conexão caiu. O trabalho dos alunos segue salvo neles.</div>}
+      {failed && <div className="errbox">{mode === 'hub' ? 'O programa recusou o painel.' : 'Sem internet para abrir a sala.'}</div>}
       {mode === 'hub' && (
         <div className="stack" style={{ gap: 0 }}>
           <span className="conn-label">IP para os alunos</span>
-          <span className="muted">Abra o programa neste computador para ver</span>
+          <span className="muted">Abra o programa Oblita neste computador para ver</span>
         </div>
       )}
-      {missing && <div className="errbox">Programa não encontrado neste computador.</div>}
+      {mode === 'rtc' && <span className="small warn">Sem o programa: todos precisam entrar antes de cortar a internet, e quem der F5 depois não volta.</span>}
+      {missing && <div className="errbox">Programa não encontrado neste computador. Baixe e abra, ou use sem o programa.</div>}
       <div className="row wrap">
         <Pill tone="primary" disabled={connecting || (mode === 'relay' && onlineBlocked)} onClick={() => void connect()}>
           {connecting && <Loader2 size={16} className="spin" />}
-          {state === 'down' ? 'Reconectar' : missing ? 'Tentar de novo' : mode === 'hub' ? 'Conectar ao programa' : mode === 'relay' ? 'Abrir online' : 'Abrir no navegador'}
+          {state === 'down' ? 'Reconectar' : missing ? 'Tentar de novo' : mode === 'hub' ? 'Conectar ao programa' : mode === 'relay' ? 'Abrir sala online' : 'Abrir sem o programa'}
         </Pill>
         {mode === 'hub' && !hosted && (
           <a className="pill" href={HOST_URL} rel="noreferrer">
-            <Download size={16} /> Baixar
+            <Download size={16} /> Baixar programa
           </a>
         )}
       </div>
+      {place === 'local' && !hosted && (
+        <button type="button" className="conn-alt small" onClick={() => setMode(mode === 'rtc' ? 'hub' : 'rtc')}>
+          {mode === 'rtc' ? 'Usar o programa' : 'Não posso instalar o programa'}
+        </button>
+      )}
     </div>
   )
 }

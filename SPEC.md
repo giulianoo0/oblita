@@ -105,10 +105,10 @@ Máquina do aluno
 
 | Modo | Requisitos | F5 sem internet |
 |---|---|---|
-| Programa + IP (principal) | Chromium ≥ 147, página baixada, porta liberada, permissão de rede local | Reconecta sozinho |
-| Programa + `https://IP:3067` | Só o programa e um Chromium, sem nada baixado antes. Aviso de certificado | Reconecta, com o programa aberto |
-| Só navegador + código | Todos entram antes do corte, na mesma rede, aba do professor aberta | **Não reconecta** |
-| Online + código | Internet em todos, de qualquer rede. Sala sem "rede isolada" | Reconecta, com internet |
+| Local: programa + IP (principal) | Chromium ≥ 147, página baixada, porta liberada, permissão de rede local | Reconecta sozinho |
+| Local: programa + `https://IP:3067` | Só o programa e um Chromium, sem nada baixado antes. Aviso de certificado | Reconecta, com o programa aberto |
+| Local sem o programa + código | Todos entram antes do corte, na mesma rede, aba do professor aberta | **Não reconecta** |
+| Online: código | Internet em todos, de qualquer rede. Sala sem "rede isolada" | Reconecta, com internet |
 
 **Sala online:** o painel abre `/relay?code=…&role=host` com um segredo aleatório da sala; o primeiro segredo fica (em hash) no Durable Object do código, e só ele volta a ser o painel. O relay fala o protocolo do hub (`shared/relay.ts`, mesma lógica no dublê `server/relay.ts`), então o resto do painel não muda. O canal continua cifrado de ponta a ponta: o relay vê só bytes. O aluno digita o código; a página pergunta a `/relay` se a sala é online e, se não for, cai no WebRTC do modo só navegador. Nesse modo o alerta "Internet voltou" não existe. A sala some do relay 14 dias depois do último painel conectado.
 
