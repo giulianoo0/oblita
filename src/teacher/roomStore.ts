@@ -33,6 +33,10 @@ export interface RoomState {
   identity: TeacherIdentity
   clocks?: QuestionClocks
   createdAt: number
+  // Sala online: o segredo prova ao relay que este painel é o dono do código; online diz se o
+  // professor escolheu esse modo, para reconectar sozinho depois de um F5.
+  relaySecret?: string
+  online?: boolean
   students: Student[]
   teams: Team[]
   alerts: AlertEntry[]
@@ -85,7 +89,7 @@ export class RoomStore {
       if (this.last.get(key) !== fingerprint) pending.push([key, value, fingerprint])
     }
     const fixed: Static = { ...rest, v: 2 }
-    changed(this.key(), fixed, JSON.stringify([rest.config, rest.phase, rest.endsAt, rest.clocks, rest.teamCodes, rest.hasPassword]))
+    changed(this.key(), fixed, JSON.stringify([rest.config, rest.phase, rest.endsAt, rest.clocks, rest.teamCodes, rest.hasPassword, rest.relaySecret, rest.online]))
     const lean = students.map((s) => ({ ...s, peer: null, online: false, signalLost: false, lastBeat: 0, status: OFF }))
     changed(this.key('students'), lean, JSON.stringify(lean))
     const bare = teams.map(({ doc: _doc, ...t }) => t)

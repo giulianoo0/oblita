@@ -3,6 +3,7 @@ import { resolve, sep } from 'node:path'
 import { Elysia } from 'elysia'
 import { createHub } from './hub'
 import { createSignal } from './signal'
+import { createRelay } from './relay'
 import { HUB_PORT } from '../shared/protocol'
 
 const port = Number(process.env.PORT ?? 3000)
@@ -24,6 +25,7 @@ async function serve(path: string, headers: Record<string, string>) {
 
 new Elysia()
   .use(createSignal())
+  .use(createRelay())
   .get('/healthz', () => 'ok')
   .get('*', ({ path, set }) => serve(path, set.headers as Record<string, string>))
   .listen(port)

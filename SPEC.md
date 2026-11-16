@@ -86,6 +86,7 @@ Testados nesta máquina (Edge 156, Windows), não só lidos em documentação:
 ```
 Cloudflare Worker (oblita.giuli.dev)
   estáticos + /healthz + /signal (Durable Object, só para o modo navegador)
+  + /relay (mesmo Durable Object: sala online, repassa bytes cifrados entre painel e alunos)
 
 Máquina do professor
   navegador: painel React, gabarito, correção, estado da sala (IndexedDB)
@@ -107,6 +108,9 @@ Máquina do aluno
 | Programa + IP (principal) | Chromium ≥ 147, página baixada, porta liberada, permissão de rede local | Reconecta sozinho |
 | Programa + `https://IP:3067` | Só o programa e um Chromium, sem nada baixado antes. Aviso de certificado | Reconecta, com o programa aberto |
 | Só navegador + código | Todos entram antes do corte, na mesma rede, aba do professor aberta | **Não reconecta** |
+| Online + código | Internet em todos, de qualquer rede. Sala sem "rede isolada" | Reconecta, com internet |
+
+**Sala online:** o painel abre `/relay?code=…&role=host` com um segredo aleatório da sala; o primeiro segredo fica (em hash) no Durable Object do código, e só ele volta a ser o painel. O relay fala o protocolo do hub (`shared/relay.ts`, mesma lógica no dublê `server/relay.ts`), então o resto do painel não muda. O canal continua cifrado de ponta a ponta: o relay vê só bytes. O aluno digita o código; a página pergunta a `/relay` se a sala é online e, se não for, cai no WebRTC do modo só navegador. Nesse modo o alerta "Internet voltou" não existe. A sala some do relay 14 dias depois do último painel conectado.
 
 ## 6. Formatos
 

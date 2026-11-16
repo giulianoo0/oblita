@@ -26,7 +26,7 @@ import {
 } from '../../shared/protocol'
 import { idb, requestPersistence } from '../lib/idb'
 import { Observable, randomId } from '../lib/store'
-import { LinkError, connectHub, connectRtc, type ConnectError, type Link } from '../net/link'
+import { LinkError, connectCode, connectHub, type ConnectError, type Link } from '../net/link'
 import { ExamDoc } from '../collab/examDoc'
 import { compile, run, type CompileResult } from '../compiler/client'
 import { BUILD, pinBuild, unpinBuild } from '../lib/offline'
@@ -292,7 +292,7 @@ export class StudentSession extends Observable {
     this.connectError = null
     this.changed()
     try {
-      const link = saved.via.kind === 'hub' ? await connectHub(saved.via.address) : await connectRtc(saved.via.code)
+      const link = saved.via.kind === 'hub' ? await connectHub(saved.via.address) : await connectCode(saved.via.code)
       this.attach(link)
       return true
     } catch (err) {
@@ -861,6 +861,8 @@ export class StudentSession extends Observable {
   private async raise(kind: AlertKind, detail?: string) {
     const s = this.saved
     if (!s) return
+    // Na sala online a internet é o caminho até o professor, não sinal de cola.
+    if (kind === 'internet-back' && this.link?.kind === 'relay') return
     this.chain = this.chain.then(async () => {
       const seq = ++s.eventSeq
       const at = Date.now()

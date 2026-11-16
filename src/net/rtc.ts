@@ -74,3 +74,19 @@ export function signalUrl(code: string) {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
   return `${proto}//${location.host}/signal?code=${encodeURIComponent(code.toUpperCase())}`
 }
+
+// Sala online: o relay na nuvem, na mesma origem do site.
+export function relayUrl(code: string, params: Record<string, string> = {}) {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const q = new URLSearchParams({ code: code.toUpperCase(), ...params })
+  return `${proto}//${location.host}/relay?${q}`
+}
+
+export async function relayStatus(code: string, timeoutMs = 5000): Promise<{ relay: boolean; host: boolean } | null> {
+  try {
+    const res = await fetch(`/relay?code=${encodeURIComponent(code.toUpperCase())}`, { cache: 'no-store', signal: AbortSignal.timeout(timeoutMs) })
+    return res.ok ? await res.json() : null
+  } catch {
+    return null
+  }
+}

@@ -7,6 +7,7 @@ mod config;
 mod files;
 mod files_ws;
 mod tui;
+mod update;
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -804,7 +805,7 @@ async fn serve(token: String, app: Arc<App>) -> Result<(), String> {
     if log::to_stdout() {
         log!("{LOGO}");
     }
-    log!("Oblita Host: tudo certo, o programa está rodando.");
+    log!("Oblita Host: tudo certo, o programa está rodando (versão {}).", update::version_label());
     log!("");
     let addresses = lan_addresses();
     if addresses.is_empty() {
@@ -863,6 +864,8 @@ Opções:
   --pasta <caminho>  grava nesta pasta só desta vez, sem mudar a escolha salva
   --porta <número>   escuta nesta porta em vez da 7787, sem o site na 3067 (para testes)
   --plain            sem a tela de menu: só o registro, linha a linha
+  --no-update        não procura versão nova (sem isto, procura ao abrir e a cada hora,
+                     em silêncio sem internet, e a nova só vale ao abrir de novo)
   --help, -h         mostra esta ajuda
 ";
 
@@ -871,6 +874,10 @@ fn main() {
     if args.iter().skip(1).any(|a| matches!(a.as_str(), "--help" | "-h" | "/?")) {
         print!("{HELP}");
         return;
+    }
+    // Versão nova guardada de uma prova anterior: troca e roda a nova antes de abrir qualquer porta.
+    if let Some(code) = update::relaunch_if_staged(&args) {
+        std::process::exit(code);
     }
     // Sem terminal (saída redirecionada, como no CI), a tela de menu não teria onde desenhar.
     let plain = args.iter().any(|a| a == "--plain") || !io::stdout().is_terminal() || !io::stdin().is_terminal();
@@ -893,6 +900,7 @@ fn main() {
         log!("Não foi possível criar a pasta de gravação {}: {error}. Escolha outra no menu.", folder.display());
     }
     let app = Arc::new(App::new(folder, config_file, chosen.is_none()));
+    update::start(app.clone(), &args);
 
     let (stopped_tx, stopped_rx) = std::sync::mpsc::channel::<String>();
     let server = app.clone();

@@ -57,7 +57,7 @@ function buildInfo(): Plugin {
 export default defineConfig({
   plugins: [react(), runWorkerSource(), buildInfo()],
   define: { __BUILD__: JSON.stringify(BUILD) },
-  server: { proxy: { '/signal': { target: 'ws://localhost:3000', ws: true } } },
+  server: { proxy: { '/signal': { target: 'ws://localhost:3000', ws: true }, '/relay': { target: 'http://localhost:3000', ws: true } } },
   // O pacote acha os .wasm pelo próprio caminho, e o pré-empacotamento do Vite quebraria isso.
   optimizeDeps: { exclude: ['@yowasp/clang'] },
   worker: { format: 'es' },

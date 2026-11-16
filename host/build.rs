@@ -1,6 +1,8 @@
 // O ícone do .exe exige o rc.exe do Windows SDK, que o CI tem. Sem ele o programa só fica sem ícone.
 fn main() {
     println!("cargo:rerun-if-changed=oblita.ico");
+    // Commit do CI, lido por option_env! em update.rs. Sem ele o programa é "dev" e não se atualiza.
+    println!("cargo:rerun-if-env-changed=OBLITA_BUILD");
     // O site entra no .exe. Sem ele (só o programa, sem `vite build`) a pasta vazia ainda compila.
     println!("cargo:rerun-if-changed=../dist");
     let _ = std::fs::create_dir_all("../dist");

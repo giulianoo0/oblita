@@ -37,7 +37,7 @@ import { idb, requestPersistence } from '../lib/idb'
 import { Observable, randomId } from '../lib/store'
 import { addTime, expiredQuestions, isOpen, isVisible, release, visibleExam, withdraw, type Flow, type QuestionClocks } from '../../shared/flow'
 import { ExamDoc } from '../collab/examDoc'
-import { connectHubBus, connectRtcBus, type Bus } from '../net/bus'
+import { connectHubBus, connectRelayBus, connectRtcBus, type Bus } from '../net/bus'
 import { hubUrls } from '../net/link'
 import { compile, run, setCompilePool, type CompileResult } from '../compiler/client'
 import { sandboxPort } from '../compiler/sandbox'
@@ -245,7 +245,11 @@ export class Room extends Observable {
   liveFrame = new Map<string, string>()
 
   bus: Bus | null = null
-  busState: 'none' | 'connecting' | 'hub' | 'rtc' | 'down' = 'none'
+  busState: 'none' | 'connecting' | 'hub' | 'rtc' | 'relay' | 'down' = 'none'
+  // Sala online escolhida: o painel volta sozinho ao relay depois de queda ou F5.
+  online = false
+  private relaySecret = ''
+  private relayRetry: number | null = null
   private receiptJobs = new Map<string, Promise<void>>()
   hubAddresses: string[] = []
   // Onde os alunos abrem o site servido pelo programa. Vazio se esta versão do programa não serve.
@@ -361,6 +365,8 @@ export class Room extends Observable {
     room.endsAt = snap.endsAt
     room.roomCode = snap.roomCode
     room.createdAt = snap.createdAt
+    room.relaySecret = snap.relaySecret ?? ''
+    room.online = snap.online === true
     room.roomKey = fromB64(snap.roomKey)
     room.salt = snap.salt
     room.hasPassword = snap.hasPassword
@@ -408,6 +414,8 @@ export class Room extends Observable {
       identity: this.identity,
       clocks: this.clocks,
       createdAt: this.createdAt,
+      relaySecret: this.relaySecret || undefined,
+      online: this.online || undefined,
       students: [...this.students.values()],
       teams: [...this.teams.values()],
       alerts: this.alerts,
@@ -477,6 +485,49 @@ export class Room extends Observable {
     }
   }
 
+  // Sala online: o relay no site faz o papel do programa, para alunos em qualquer rede.
+  async useOnline() {
+    if (this.relayRetry !== null) window.clearTimeout(this.relayRetry)
+    this.relayRetry = null
+    if (!this.relaySecret) this.relaySecret = toB64(randomBytes(32)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+    this.online = true
+    this.busState = 'connecting'
+    this.changed()
+    try {
+      this.attachBus(await connectRelayBus(this.roomCode, this.relaySecret))
+      this.busState = 'relay'
+      void this.save()
+    } catch (err) {
+      this.busState = 'down'
+      this.retryOnline()
+      throw err
+    } finally {
+      this.changed()
+    }
+  }
+
+  leaveOnline() {
+    this.online = false
+    if (this.relayRetry !== null) window.clearTimeout(this.relayRetry)
+    this.relayRetry = null
+    if (this.bus?.kind === 'relay') {
+      this.bus.close()
+      this.bus = null
+      this.busState = 'none'
+    }
+    void this.save()
+    this.changed()
+  }
+
+  // Internet que oscila: tenta de novo sem o professor precisar clicar.
+  private retryOnline() {
+    if (!this.online || this.disposed || this.relayRetry !== null) return
+    this.relayRetry = window.setTimeout(() => {
+      this.relayRetry = null
+      if (this.online && !this.disposed && (this.busState === 'down' || this.busState === 'none')) void this.useOnline().catch(() => {})
+    }, 3000)
+  }
+
   async useBrowser() {
     this.busState = 'connecting'
     this.changed()
@@ -500,7 +551,7 @@ export class Room extends Observable {
     bus.onopen = (peer) => void this.startHandshake(peer)
     bus.onframe = (peer, frame) => this.onFrame(peer, frame)
     bus.onpeerclose = (peer) => this.onPeerClose(peer)
-    bus.ondown = () => {
+    bus.ondown = (replaced) => {
       if (this.bus !== bus) return
       this.bus = null
       this.busState = 'down'
@@ -511,6 +562,8 @@ export class Room extends Observable {
       this.peers.clear()
       this.links.clear()
       this.changed()
+      // Outra aba assumiu: voltar roubaria a sala dela, e as duas ficariam se derrubando.
+      if (bus.kind === 'relay' && !replaced) this.retryOnline()
     }
   }
 
@@ -1687,7 +1740,8 @@ export class Room extends Observable {
       if (prev.fullscreen && !next.fullscreen) this.alertOnce(s, 'fullscreen-exit')
       if (prev.screen && !next.screen) this.alertOnce(s, 'share-ended')
       if (!prev.extended && next.extended) this.alertOnce(s, 'multi-monitor')
-      if (prev.isolated === true && next.isolated === false) this.alertOnce(s, 'internet-back')
+      // Na sala online todo mundo está com internet: a volta dela não diz nada.
+      if (prev.isolated === true && next.isolated === false && this.bus?.kind !== 'relay') this.alertOnce(s, 'internet-back')
     }
     if (!changed) return
     if (s.status.focused !== prev.focused) this.broadcastGroup(s.groupId)

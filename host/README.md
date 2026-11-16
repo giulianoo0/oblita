@@ -47,6 +47,10 @@ O programa traz o site inteiro e o serve na porta 3067, sem depender do `oblita.
 
 Ao abrir, o programa tenta criar uma regra de entrada para o próprio `.exe` nas redes privadas e públicas, se ela ainda não existir. Isso exige administrador. Sem essa permissão, basta clicar em Permitir no aviso do Windows ou abrir o programa como administrador uma vez. Cancelar esse aviso faz o Windows criar regras de bloqueio chamadas `oblita-host`, e bloqueio vence liberação; abrir como administrador também as apaga. Em computadores de domínio (comum em escolas), a regra precisa ser criada à mão ou pela TI, porque ela não cobre o perfil de domínio.
 
+## Atualização automática
+
+Ao abrir e depois a cada hora, em segundo plano, o programa compara o próprio commit com o `oblita-host.version` da release `host-latest` e, se houver outro, baixa o `.exe` novo ao lado do atual e confere que é um `.exe` daquele commit. Nunca reinicia sozinho: com a sala vazia (sem aluno nem painel) troca o arquivo na hora, deixando o antigo como `oblita-host.old.exe`, apagado na abertura seguinte; com prova em andamento guarda como `oblita-host.new.exe` e troca quando a sala esvaziar ou na próxima abertura, antes de abrir as portas. A tela mostra a versão e "nova versão pronta: vale ao reabrir". Sem internet não diz nada. Fica desligada com `--no-update`, com `--porta`, com as variáveis `OBLITA_NO_UPDATE` ou `CI`, fora do Windows e em build local (versão "dev", sem `OBLITA_BUILD`).
+
 ## Build
 
 O `.exe` publicado vem do CI (`.github/workflows/host.yml`), que compila com MSVC e `--locked`, roda os testes e o `smoke.ps1` e publica na release `host-latest`.

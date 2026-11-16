@@ -102,7 +102,8 @@ $log = Join-Path ([IO.Path]::GetTempPath()) 'oblita-host.log'
 $errLog = Join-Path ([IO.Path]::GetTempPath()) 'oblita-host.err.log'
 try {
   if ($Exe) {
-    $process = Start-Process -FilePath (Resolve-Path $Exe).Path -PassThru -RedirectStandardOutput $log -RedirectStandardError $errLog
+    # Sem --no-update o programa testado poderia trocar a si mesmo pela versão publicada.
+    $process = Start-Process -FilePath (Resolve-Path $Exe).Path -ArgumentList '--no-update' -PassThru -RedirectStandardOutput $log -RedirectStandardError $errLog
   }
   $up = $false
   for ($i = 0; $i -lt 40 -and -not $up; $i++) {

@@ -1,9 +1,9 @@
-// Lado do aluno: uma conexão com o professor, seja pelo IP ou por WebRTC.
+// Lado do aluno: uma conexão com o professor, pelo IP, por WebRTC ou pela sala online.
 import { FRONT_PORT, HUB_PORT } from '../../shared/protocol'
-import { DataPipe, RTC_CONFIG, signalUrl, waitIce } from './rtc'
+import { DataPipe, RTC_CONFIG, relayStatus, relayUrl, signalUrl, waitIce } from './rtc'
 
 export interface Link {
-  kind: 'hub' | 'rtc'
+  kind: 'hub' | 'rtc' | 'relay'
   send(frame: Uint8Array): void
   buffered(): number
   close(): void
@@ -82,11 +82,15 @@ export async function connectHub(address: string): Promise<Link> {
     if (err instanceof LinkError) throw err
     throw new LinkError((await permissionDenied(host)) ? 'permission' : 'unreachable')
   }
+  return openSocket(`${hubUrls(host, port).ws}/ws/student`, 'hub')
+}
+
+function openSocket(url: string, kind: 'hub' | 'relay'): Promise<Link> {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`${hubUrls(host, port).ws}/ws/student`)
+    const ws = new WebSocket(url)
     ws.binaryType = 'arraybuffer'
     const link: Link = {
-      kind: 'hub',
+      kind,
       send: (frame) => ws.readyState === WebSocket.OPEN && ws.send(frame as Uint8Array<ArrayBuffer>),
       buffered: () => ws.bufferedAmount,
       close: () => ws.close(),
@@ -101,6 +105,16 @@ export async function connectHub(address: string): Promise<Link> {
     ws.onmessage = (e) => link.onframe(new Uint8Array(e.data as ArrayBuffer))
     ws.onclose = () => (opened ? link.onclose() : reject(new LinkError('unreachable')))
   })
+}
+
+// Código da sala: se o professor abriu a sala online, entra pelo relay, de qualquer rede.
+// Senão, é o modo só navegador, por WebRTC na rede local.
+export async function connectCode(code: string): Promise<Link> {
+  const status = await relayStatus(code)
+  if (!status) throw new LinkError('no-signal')
+  if (!status.relay) return connectRtc(code)
+  if (!status.host) throw new LinkError('no-host')
+  return openSocket(relayUrl(code), 'relay')
 }
 
 export async function connectRtc(code: string): Promise<Link> {

@@ -26,6 +26,9 @@ concurrency:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      # Vai para dentro do .exe (host/src/update.rs) e para o oblita-host.version da release.
+      OBLITA_BUILD: ${{ github.sha }}
     defaults:
       run:
         shell: pwsh
@@ -86,4 +89,9 @@ jobs:
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
           }
           gh release upload host-latest target/release/oblita-host.exe --clobber
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          # Depois do .exe: quem vê o commit novo no .version já encontra o .exe dele.
+          # Sem BOM e sem quebra de linha; o programa só aceita o commit em hexadecimal.
+          [IO.File]::WriteAllText("$PWD/target/release/oblita-host.version", $env:OBLITA_BUILD)
+          gh release upload host-latest target/release/oblita-host.version --clobber
           if ($LASTEXITCODE) { exit $LASTEXITCODE }

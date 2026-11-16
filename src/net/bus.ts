@@ -1,7 +1,7 @@
-// Lado do professor: muitas conexões de aluno, vindas do programa local ou de WebRTC.
+// Lado do professor: muitas conexões de aluno, vindas do programa local, de WebRTC ou da sala online.
 import { HUB_PORT } from '../../shared/protocol'
 import { HubOp, decodeHub, encodeHub } from '../../shared/frames'
-import { DataPipe, RTC_CONFIG, signalUrl, waitIce } from './rtc'
+import { DataPipe, RTC_CONFIG, relayUrl, signalUrl, waitIce } from './rtc'
 import { hubUrls, parseAddress, pingHub, servedByHost } from './link'
 
 const MAX_RTC_PEERS = 512
@@ -10,7 +10,7 @@ const MAX_RTC_PEERS = 512
 const MAX_BUFFERED = 256 * 1024 * 1024
 
 export interface Bus {
-  kind: 'hub' | 'rtc'
+  kind: 'hub' | 'rtc' | 'relay'
   // false quando não saiu: conexão fechada, ou fila cheia e o aluno foi derrubado.
   send(peer: string, frame: Uint8Array): boolean
   buffered(peer: string): number
@@ -19,20 +19,29 @@ export interface Bus {
   onopen: (peer: string) => void
   onframe: (peer: string, frame: Uint8Array) => void
   onpeerclose: (peer: string) => void
-  ondown: () => void
+  // replaced: outro painel (outra aba) assumiu a sala online.
+  ondown: (replaced?: boolean) => void
 }
 
 export type BusInfo = { kind: 'hub'; address: string } | { kind: 'rtc'; code: string }
 
 export async function connectHubBus(address: string, token: string, opts: { maxBuffered?: number } = {}): Promise<Bus> {
-  const maxBuffered = opts.maxBuffered ?? MAX_BUFFERED
   const parsed = parseAddress(address) ?? { host: 'localhost', port: HUB_PORT }
   await pingHub(parsed.host, parsed.port, 2500)
+  return openHostSocket(`${hubUrls(parsed.host, parsed.port).ws}/ws/host?token=${encodeURIComponent(token)}`, 'hub', opts.maxBuffered ?? MAX_BUFFERED)
+}
+
+// Sala online: o relay fala o mesmo protocolo do programa. O segredo prova que o painel é o dono da sala.
+export function connectRelayBus(code: string, secret: string): Promise<Bus> {
+  return openHostSocket(relayUrl(code, { role: 'host', secret }), 'relay', MAX_BUFFERED)
+}
+
+function openHostSocket(url: string, kind: 'hub' | 'relay', maxBuffered: number): Promise<Bus> {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`${hubUrls(parsed.host, parsed.port).ws}/ws/host?token=${encodeURIComponent(token)}`)
+    const ws = new WebSocket(url)
     ws.binaryType = 'arraybuffer'
     const bus: Bus = {
-      kind: 'hub',
+      kind,
       send: (peer, frame) => {
         if (ws.readyState !== WebSocket.OPEN) return false
         // O aluno reenvia ao reconectar o que não foi confirmado: event e rec são fluxos confiáveis.
@@ -56,7 +65,7 @@ export async function connectHubBus(address: string, token: string, opts: { maxB
       opened = true
       resolve(bus)
     }
-    ws.onclose = () => (opened ? bus.ondown() : reject(new Error('hub recusou o painel')))
+    ws.onclose = (e) => (opened ? bus.ondown(e.code === 4001) : reject(new Error(kind === 'relay' ? 'sala online recusou o painel' : 'hub recusou o painel')))
     ws.onmessage = (e) => {
       const { conn, op, data } = decodeHub(new Uint8Array(e.data as ArrayBuffer))
       const peer = String(conn)

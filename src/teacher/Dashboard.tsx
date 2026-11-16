@@ -227,11 +227,16 @@ export function useRoomRuntime(room: Room, onAlarm?: (clientId: string) => void)
   useEffect(
     () =>
       keepConnected({
-        wanted: async () => (room.busState === 'none' || room.busState === 'down') && !prefersBrowser.has(room) && (await loopbackGranted()),
+        wanted: async () => (room.busState === 'none' || room.busState === 'down') && !prefersBrowser.has(room) && !room.online && (await loopbackGranted()),
         connect: () => connectProgram(room),
       }),
     [room],
   )
+
+  // Sala online escolhida antes do F5: volta sozinha ao relay, sem clique.
+  useEffect(() => {
+    if (room.online && room.busState === 'none' && !servedByHost()) void room.useOnline().catch(() => {})
+  }, [room])
 }
 
 export default function Dashboard() {
@@ -461,12 +466,14 @@ function TeacherCode({ room }: { room: Room }) {
 }
 
 function ConnectionCard({ room }: { room: Room }) {
-  const [mode, setModeState] = useState<'hub' | 'rtc'>(room.bus?.kind ?? (prefersBrowser.has(room) ? 'rtc' : 'hub'))
-  const setMode = (next: 'hub' | 'rtc') => {
-    if (next === 'rtc') prefersBrowser.add(room)
+  const [mode, setModeState] = useState<'hub' | 'rtc' | 'relay'>(room.bus?.kind ?? (room.online ? 'relay' : prefersBrowser.has(room) ? 'rtc' : 'hub'))
+  const setMode = (next: 'hub' | 'rtc' | 'relay') => {
+    if (next !== 'hub') prefersBrowser.add(room)
     else prefersBrowser.delete(room)
     setModeState(next)
   }
+  // A sala online precisa de internet nos alunos; com "rede isolada" ninguém passaria do preparo.
+  const onlineBlocked = room.config.requireIsolation
   const [busy, setBusy] = useState(false)
   const [missing, setMissing] = useState(false)
   const [failed, setFailed] = useState(false)
@@ -486,6 +493,7 @@ function ConnectionCard({ room }: { room: Room }) {
     setMissing(false)
     try {
       if (mode === 'hub') setMissing(!(await connectProgram(room)))
+      else if (mode === 'relay') await room.useOnline()
       else await room.useBrowser()
     } catch {
       setFailed(true)
@@ -536,6 +544,31 @@ function ConnectionCard({ room }: { room: Room }) {
     )
   }
 
+  if (state === 'relay' || (room.online && (state === 'connecting' || state === 'down'))) {
+    return (
+      <div className="card conn">
+        <div className="row">
+          <i className={`dot${state === 'relay' ? ' on' : ''}`} />
+          <h2 className="grow">Online</h2>
+          {lock}
+        </div>
+        <div className="stack" style={{ gap: 0 }}>
+          <span className="conn-label">Código</span>
+          <span className="conn-big">{room.roomCode}</span>
+        </div>
+        <TeacherCode room={room} />
+        {state === 'relay' ? (
+          <span className="small muted">Os alunos entram de qualquer rede pelo código, em {location.host}.</span>
+        ) : (
+          <div className="errbox">Sem conexão com a sala online. Tentando de novo; o trabalho dos alunos segue salvo neles.</div>
+        )}
+        <div className="row wrap">
+          <Pill onClick={() => room.leaveOnline()}>Sair do modo online</Pill>
+        </div>
+      </div>
+    )
+  }
+
   if (state === 'rtc') {
     return (
       <div className="card conn">
@@ -564,6 +597,7 @@ function ConnectionCard({ room }: { room: Room }) {
             onChange={setMode}
             options={[
               { value: 'hub', label: 'Programa' },
+              { value: 'relay', label: 'Online' },
               { value: 'rtc', label: 'Só navegador' },
             ]}
           />
@@ -572,6 +606,11 @@ function ConnectionCard({ room }: { room: Room }) {
       <TeacherCode room={room} />
       {state === 'down' && room.students.size > 0 && <div className="errbox">Conexão caiu. O trabalho dos alunos segue salvo neles.</div>}
       {failed && <div className="errbox">{mode === 'hub' ? 'O programa recusou o painel.' : 'Sem internet para abrir o código.'}</div>}
+      {mode === 'relay' && (
+        <span className="small muted">
+          {onlineBlocked ? 'Esta sala exige internet bloqueada nos alunos, então não pode ser online.' : 'Alunos em qualquer rede entram pelo código. Todos precisam de internet durante a prova.'}
+        </span>
+      )}
       {mode === 'hub' && (
         <div className="stack" style={{ gap: 0 }}>
           <span className="conn-label">IP para os alunos</span>
@@ -580,9 +619,9 @@ function ConnectionCard({ room }: { room: Room }) {
       )}
       {missing && <div className="errbox">Programa não encontrado neste computador.</div>}
       <div className="row wrap">
-        <Pill tone="primary" disabled={connecting} onClick={() => void connect()}>
+        <Pill tone="primary" disabled={connecting || (mode === 'relay' && onlineBlocked)} onClick={() => void connect()}>
           {connecting && <Loader2 size={16} className="spin" />}
-          {state === 'down' ? 'Reconectar' : missing ? 'Tentar de novo' : mode === 'hub' ? 'Conectar ao programa' : 'Abrir no navegador'}
+          {state === 'down' ? 'Reconectar' : missing ? 'Tentar de novo' : mode === 'hub' ? 'Conectar ao programa' : mode === 'relay' ? 'Abrir online' : 'Abrir no navegador'}
         </Pill>
         {mode === 'hub' && !hosted && (
           <a className="pill" href={HOST_URL} rel="noreferrer">

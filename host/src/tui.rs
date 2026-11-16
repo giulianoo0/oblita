@@ -19,7 +19,7 @@ use ratatui::{
     DefaultTerminal, Frame,
 };
 
-use crate::app::App;
+use crate::{app::App, update::State};
 
 const LOGO: [&str; 5] = [
     "        _     _ _ _",
@@ -221,7 +221,8 @@ fn draw(frame: &mut Frame, app: &App, screen: &Screen) {
     let [logo_area, status_area] = Layout::horizontal([Constraint::Length(32), Constraint::Min(20)]).areas(top);
 
     let brand = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
-    let logo: Vec<Line> = std::iter::once(Line::default()).chain(LOGO.iter().map(|l| Line::styled(*l, brand))).collect();
+    let mut logo: Vec<Line> = std::iter::once(Line::default()).chain(LOGO.iter().map(|l| Line::styled(*l, brand))).collect();
+    logo.extend(version_lines());
     frame.render_widget(Paragraph::new(logo), logo_area);
     frame.render_widget(Paragraph::new(status_lines(app, screen)).wrap(Wrap { trim: false }), status_area);
     frame.render_widget(folder_block(app, screen), folder_area);
@@ -230,6 +231,22 @@ fn draw(frame: &mut Frame, app: &App, screen: &Screen) {
     let lines: Vec<Line> = crate::log::recent(height).into_iter().map(Line::from).collect();
     frame.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::TOP).title(" Registro ")), log_area);
     frame.render_widget(menu(screen), menu_area);
+}
+
+// Embaixo do logo, que tem 32 colunas e sobra de 3 linhas.
+fn version_lines() -> Vec<Line<'static>> {
+    let off = Style::default().fg(Color::DarkGray);
+    let label = crate::update::version_label();
+    match crate::update::state() {
+        State::Dev => vec![Line::styled(format!("  versão {label} (sem atualização)"), off)],
+        State::Off | State::Current => vec![Line::styled(format!("  versão {label}"), off)],
+        State::Updated => vec![Line::styled(format!("  atualizado para {label}"), Style::default().fg(Color::Green))],
+        State::Ready(new) => vec![
+            Line::styled(format!("  versão {label}"), off),
+            Line::styled(format!("  nova versão {} pronta:", crate::update::short(&new)), Style::default().fg(Color::Yellow)),
+            Line::styled("  vale ao reabrir o programa", Style::default().fg(Color::Yellow)),
+        ],
+    }
 }
 
 fn status_lines(app: &App, screen: &Screen) -> Vec<Line<'static>> {
